@@ -1,0 +1,873 @@
+diff -ruN a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml	2026-10-31 14:33:19.985658998 -0500
++++ b/Cargo.toml	2026-10-31 14:33:54.405026501 -0500
+@@ -1,77 +1,41 @@
+ [package]
+-name = "codegraph-kernel"
++name = "cg-kernel"
+ version = "0.1.0"
+ edition = "2021"
+ license = "MIT"
+ publish = false
+-description = "Native extraction kernel for CodeGraph — tree-sitter parse+extract with one JS boundary crossing per file"
++description = "Upstream CodeGraph extraction kernel (MIT, colbymchenry/codegraph) with napi removed; see patches/"
+ 
+ [lib]
+-crate-type = ["cdylib"]
++crate-type = ["rlib"]
++
++[features]
++default = ["lang-ts", "lang-python", "lang-go", "lang-java", "lang-rust", "lang-kotlin"]
++lang-ts = ["dep:tree-sitter-typescript", "dep:tree-sitter-javascript"]
++lang-python = ["dep:tree-sitter-python"]
++lang-go = ["dep:tree-sitter-go"]
++lang-java = ["dep:tree-sitter-java"]
++lang-rust = ["dep:tree-sitter-rust"]
++lang-kotlin = ["dep:tree-sitter-language"]
+ 
+ [dependencies]
+-napi = { version = "3", default-features = false, features = ["napi8"] }
+-napi-derive = "3"
+ tree-sitter = "0.25"
+ sha2 = "0.10"
+ regex = "1"
+ 
+-# Grammars — MUST stay revision-matched with the wasm grammars the fallback
+-# path loads (tree-sitter-wasms npm package / src/extraction/wasm/). The
+-# kernel-grammar-parity test asserts node-kind-table equality at test time;
+-# bump these together with the wasm side or that gate fails.
+-tree-sitter-typescript = "0.23"
+-tree-sitter-javascript = "0.25"
+-tree-sitter-java = "0.23"
+-tree-sitter-python = "0.23"
+-tree-sitter-go = "0.23"
+-# Pinned exact: the vendored wasm (src/extraction/wasm/) was built from these
+-# tags' checked-in parser.c, sha-matched against these registry tarballs
+-# (R7a prep, #1345). A patch bump here without re-vendoring breaks the match.
+-tree-sitter-c = "=0.24.2"
+-tree-sitter-cpp = "=0.23.4"
+-tree-sitter-rust = "=0.24.2"
+-# csharp: the vendored wasm (#717) predates the kernel and was verified
+-# table-identical to this crate's tarball (ABI 15, STATE_COUNT 8053, node-kind
+-# and field tables — csharp checklist header). Bump crate + wasm together.
+-tree-sitter-c-sharp = "=0.23.5"
+-# ruby: content bump, ABI stays 14 (the v0.23.1 tag predates the ABI-15
+-# generator) — kernel-grammar-parity asserts same-revision, not same-ABI.
+-tree-sitter-ruby = "=0.23.1"
+-# php: the walker calls LANGUAGE_PHP (the full HTML-interleaving variant the
+-# wasm ships) — NEVER LANGUAGE_PHP_ONLY, which errors on leading HTML.
+-tree-sitter-php = "=0.24.2"
+-# swift: NOT a crate dep — the kernel compiles tree-sitter-swift 0.7.3's
+-# tarball src/ itself (grammars/swift, build.rs), with a one-line scanner fix
+-# the crate's own build lacks on Windows (`try!`; docs/grammars/
+-# tree-sitter-swift.md). The vendored wasm is built from the same tarball.
+-# r: the vendored wasm IS r-lib v1.2.0 and this crate's tarball ships both
+-# generated artifacts sha-identical to the tag (parser.c 6221657347…,
+-# scanner.c 1209d11076… — r checklist §Grammar prep). ABI 14 (the tag
+-# predates the ABI-15 generator) — parity asserts same-revision, not
+-# same-ABI (ruby precedent). Bump crate + wasm together.
+-tree-sitter-r = "=1.2.0"
+-# luau: the vendored wasm IS tree-sitter-grammars v1.2.0 and this crate's
+-# tarball ships parser.c/scanner.c sha-identical to the tag (8f25bc17… /
+-# a157bb52… — lua-luau checklist §Grammar prep). ABI 14. Lua itself is
+-# vendored C (build.rs) — its v0.4.1 revision is not on crates.io.
+-tree-sitter-luau = "=1.2.0"
+-
+-# tree-sitter-language: the version-agnostic LanguageFn shim for the vendored
+-# grammar C (kotlin, lua, scala, dart, swift — see build.rs).
+-tree-sitter-language = "0.1"
+-
+-# Stack-bounds queries for the walker stack guard (src/stack.rs, #1581):
+-# pthread_getattr_np / pthread_get_stackaddr_np. Already in the lock file
+-# transitively; Windows uses a hand-declared kernel32 extern instead.
++# Grammars - MUST stay revision-matched with upstream (exact pins copied from
++# upstream codegraph-kernel/Cargo.toml @ UPSTREAM_COMMIT; never bump on their own).
++tree-sitter-typescript = { version = "0.23", optional = true }
++tree-sitter-javascript = { version = "0.25", optional = true }
++tree-sitter-java = { version = "0.23", optional = true }
++tree-sitter-python = { version = "0.23", optional = true }
++tree-sitter-go = { version = "0.23", optional = true }
++tree-sitter-rust = { version = "=0.24.2", optional = true }
++# Kotlin is vendored C (grammars/kotlin, compiled by build.rs): no usable crate exists.
++tree-sitter-language = { version = "0.1", optional = true }
++
+ [target.'cfg(unix)'.dependencies]
+ libc = "0.2"
+ 
+ [build-dependencies]
+-napi-build = "2"
+ cc = "1"
+-
+-[profile.release]
+-lto = true
+-codegen-units = 1
+-strip = "symbols"
+diff -ruN a/build.rs b/build.rs
+--- a/build.rs	2026-10-31 14:33:19.993658998 -0500
++++ b/build.rs	2026-10-31 14:33:54.405989979 -0500
+@@ -1,115 +1,30 @@
+ fn main() {
+-    napi_build::setup();
+-
+-    // Kotlin grammar — vendored C, compiled here instead of a crate dep: the
+-    // crates.io tree-sitter-kotlin 0.3.8 pins `tree-sitter >= 0.21, < 0.23`
+-    // (the kernel links 0.25) and tree-sitter-kotlin-ng is a DIFFERENT
+-    // grammar (8 fields vs 0, renamed kinds — extractor-breaking). Sources
+-    // are the fwcd 0.3.8 tag's checked-in generated artifacts, sha-matched
+-    // against the crates.io tarball (kotlin checklist §Grammar prep):
+-    //   parser.c  54104a7ef1555c265b746c790e0f8bb953cc17806e9df0c3af82f7f62c06a70a
+-    //   scanner.c 27f73337ec357fc341fa57538f34c14277b0346980c3405dc30beab6202ec6d0
+-    // scanner.c carries docs/grammars/tree-sitter-kotlin.patch (same-line
+-    // `e`-word semicolon fix), shared with the wasm build:
+-    //   scanner.c 2ca842dd04b60b0a6df59a03e9ad01209d8c5641f079a79a84d65708669b6cb6 (patched)
+-    // Flags crib the tarball's own bindings/rust/build.rs.
+-    let mut c = cc::Build::new();
+-    c.include("grammars/kotlin");
+-    c.file("grammars/kotlin/parser.c");
+-    c.file("grammars/kotlin/scanner.c");
+-    c.flag_if_supported("-Wno-unused-parameter");
+-    c.flag_if_supported("-Wno-unused-but-set-variable");
+-    c.flag_if_supported("-Wno-trigraphs");
+-    c.flag_if_supported("-utf-8"); // msvc
+-    c.compile("tree-sitter-kotlin");
+-    println!("cargo:rerun-if-changed=grammars/kotlin");
+-
+-    // Lua grammar — vendored C (second vendored-grammar-C language): the
+-    // vendored wasm is tree-sitter-grammars/tree-sitter-lua v0.4.1 (tag
+-    // 816840c592), which is NOT on crates.io (only 0.1/0.2/0.5 exist; 0.5.0
+-    // adds Lua-5.5 `global` — a future bump with its own gate). Sources are
+-    // the v0.4.1 tag's checked-in generated artifacts, sha-recorded in the
+-    // lua-luau checklist §Grammar prep:
+-    //   parser.c  b34a362e43f0311f405721f3089e94f97f31da403b154d456d093e64609a4081
+-    //   scanner.c 35bbd630b5a7421d46d2e91185eeea09bf78565d44cb676b63ca20d0f1b54bbd
+-    let mut lua = cc::Build::new();
+-    lua.include("grammars/lua");
+-    lua.file("grammars/lua/parser.c");
+-    lua.file("grammars/lua/scanner.c");
+-    lua.flag_if_supported("-Wno-unused-parameter");
+-    lua.flag_if_supported("-Wno-unused-but-set-variable");
+-    lua.flag_if_supported("-Wno-trigraphs");
+-    lua.flag_if_supported("-utf-8"); // msvc
+-    lua.compile("tree-sitter-lua");
+-    println!("cargo:rerun-if-changed=grammars/lua");
+-
+-    // Scala grammar — vendored C (third vendored-grammar-C language): the
+-    // vendored wasm is the tree-sitter/tree-sitter-scala v0.26.2 release asset,
+-    // and these sources are the same tag's checked-in generated artifacts
+-    // (#1823 — the previous master@0aca5d0a6f pin truncated an `extends`
+-    // clause after a parent with several argument lists):
+-    //   parser.c  9f6d03fa6c63d2d855b6f9e0368046a58568587eefc38b5e38bdb001e8ec68db
+-    //   scanner.c daed58e6cf61f5b034adf51029c566141da5fb181540b77c8a28654a26e4ddd7
+-    // parser.c is ~27 MB — the biggest grammar in the tree; expect a slow cc
+-    // step on clean builds.
+-    let mut scala = cc::Build::new();
+-    scala.include("grammars/scala");
+-    scala.file("grammars/scala/parser.c");
+-    scala.file("grammars/scala/scanner.c");
+-    scala.flag_if_supported("-Wno-unused-parameter");
+-    scala.flag_if_supported("-Wno-unused-but-set-variable");
+-    scala.flag_if_supported("-Wno-trigraphs");
+-    scala.flag_if_supported("-utf-8"); // msvc
+-    scala.compile("tree-sitter-scala");
+-    println!("cargo:rerun-if-changed=grammars/scala");
+-
+-    // Dart grammar — vendored C (fourth vendored-grammar-C language): the
+-    // production wasm is the tree-sitter-wasms 0.1.13 artifact, whose dart
+-    // dependency is an UNPINNED github:UserNobody14/tree-sitter-dart — the
+-    // vendored wasm byte-copy (src/extraction/wasm/) plus these same-commit
+-    // sources kill that hazard. crates.io tree-sitter-dart is the nielsenko
+-    // FORK (different lineage) — rejected. Sources are
+-    // UserNobody14/tree-sitter-dart master@d4d8f3e337d8 (dart checklist
+-    // §Grammar prep):
+-    //   parser.c  5a42b47abb4d494f125dbdee9138979248041689b1aa36355550fa3e28dcb8b8
+-    //   scanner.c 07a7b7818b175e9460523e705dd88d20f7b5141bac95c593d4426e6d52284996
+-    // scanner.c is load-bearing: string-template char classes and /** */ doc
+-    // comments are external tokens.
+-    let mut dart = cc::Build::new();
+-    dart.include("grammars/dart");
+-    dart.file("grammars/dart/parser.c");
+-    dart.file("grammars/dart/scanner.c");
+-    dart.flag_if_supported("-Wno-unused-parameter");
+-    dart.flag_if_supported("-Wno-unused-but-set-variable");
+-    dart.flag_if_supported("-Wno-trigraphs");
+-    dart.flag_if_supported("-Wno-unused-function");
+-    dart.flag_if_supported("-utf-8"); // msvc
+-    dart.compile("tree-sitter-dart");
+-    println!("cargo:rerun-if-changed=grammars/dart");
+-
+-    // Swift grammar — vendored C (fifth vendored-grammar-C language): the
+-    // crates.io tree-sitter-swift 0.7.3 tarball's src/, the same sources the
+-    // vendored wasm is built from (swift checklist §Grammar prep), with
+-    // docs/grammars/tree-sitter-swift.patch applied to scanner.c. The crate's
+-    // scanner builds `1UL << FAKE_TRY_BANG` (bit 32) into a constant table;
+-    // where `unsigned long` is 32 bits that overflows — MSVC folds it to 0,
+-    // so the Windows kernels read the `!` of every `try!` as a logical not
+-    // and `try! Foo()` called `!Foo`. Upstream 0.7.4 writes `1ULL`; a bump to
+-    // a fixed release can return to the crate (and the wasm moves with it).
+-    //   parser.c  d3edff6effe31b9a507f496577407987343b101b23eb7bee7a9b050e8ab5d27a
+-    //   scanner.c f3d6271d64f58c39eed544104a70ca2cf9ecbf80c5d900620f1afd38836542cb
+-    //   scanner.c 8acafef098ea4a52ebfc4cdf2fe26706113a22ac8ba2faf7d952755ff350cad6 (patched)
+-    // Flags crib the tarball's own bindings/rust/build.rs (c11). parser.c is
+-    // ~20 MB.
+-    let mut swift = cc::Build::new();
+-    swift.std("c11");
+-    swift.include("grammars/swift");
+-    swift.file("grammars/swift/parser.c");
+-    swift.file("grammars/swift/scanner.c");
+-    swift.flag_if_supported("-Wno-unused-parameter");
+-    swift.flag_if_supported("-Wno-unused-but-set-variable");
+-    swift.flag_if_supported("-Wno-trigraphs");
+-    swift.flag_if_supported("-utf-8"); // msvc
+-    swift.compile("tree-sitter-swift");
+-    println!("cargo:rerun-if-changed=grammars/swift");
++    // P1: napi_build::setup() removed. Only the Kotlin grammar (vendored C) is
++    // compiled here; the other vendored grammars (lua, scala, dart, swift)
++    // join with their walkers in M5.
++    if std::env::var_os("CARGO_FEATURE_LANG_KOTLIN").is_some() {
++        // Kotlin grammar — vendored C, compiled here instead of a crate dep: the
++        // crates.io tree-sitter-kotlin 0.3.8 pins `tree-sitter >= 0.21, < 0.23`
++        // (the kernel links 0.25) and tree-sitter-kotlin-ng is a DIFFERENT
++        // grammar (8 fields vs 0, renamed kinds — extractor-breaking). Sources
++        // are the fwcd 0.3.8 tag's checked-in generated artifacts, sha-matched
++        // against the crates.io tarball (kotlin checklist §Grammar prep):
++        //   parser.c  54104a7ef1555c265b746c790e0f8bb953cc17806e9df0c3af82f7f62c06a70a
++        //   scanner.c 27f73337ec357fc341fa57538f34c14277b0346980c3405dc30beab6202ec6d0
++        // scanner.c carries docs/grammars/tree-sitter-kotlin.patch (same-line
++        // `e`-word semicolon fix), shared with the wasm build:
++        //   scanner.c 2ca842dd04b60b0a6df59a03e9ad01209d8c5641f079a79a84d65708669b6cb6 (patched)
++        // Flags crib the tarball's own bindings/rust/build.rs.
++        let mut c = cc::Build::new();
++        c.include("grammars/kotlin");
++        c.file("grammars/kotlin/parser.c");
++        c.file("grammars/kotlin/scanner.c");
++        c.flag_if_supported("-Wno-unused-parameter");
++        c.flag_if_supported("-Wno-unused-but-set-variable");
++        c.flag_if_supported("-Wno-trigraphs");
++        c.flag_if_supported("-utf-8"); // msvc
++        c.compile("tree-sitter-kotlin");
++        println!("cargo:rerun-if-changed=grammars/kotlin");
++    }
++    println!("cargo:rerun-if-changed=build.rs");
+ }
+diff -ruN a/src/docstring.rs b/src/docstring.rs
+--- a/src/docstring.rs	2026-10-31 14:33:20.017659000 -0500
++++ b/src/docstring.rs	2026-10-31 14:41:36.818474389 -0500
+@@ -301,6 +301,8 @@
+     /// A `step_over` kind is passed without ending the run, and the comments
+     /// on either side of it join; any other node still ends it. With no
+     /// step-over kinds the walk stops at the first non-comment, as before.
++    // P1: needs the dart grammar, which is vendored with the dart walker in M5.
++    #[cfg(any())]
+     #[test]
+     fn steps_over_only_the_listed_kinds() {
+         let grammar = crate::langs::grammar_for("dart").expect("dart grammar");
+diff -ruN a/src/langs.rs b/src/langs.rs
+--- a/src/langs.rs	2026-10-31 14:33:20.029659000 -0500
++++ b/src/langs.rs	2026-10-31 14:33:54.406205702 -0500
+@@ -1,107 +1,58 @@
+-//! Grammar registry: codegraph `Language` string → native tree-sitter grammar.
++//! Grammar registry: codegraph `Language` string -> native tree-sitter grammar.
+ //!
+-//! Mirrors the wasm side's `WASM_GRAMMAR_FILES` mapping (src/extraction/
+-//! grammars.ts): `tsx` and `jsx` reuse another language's grammar exactly the
+-//! way the wasm map does. The kernel-grammar-parity test asserts each entry is
+-//! built from the SAME grammar revision as the vendored wasm — bump the crate
+-//! and the wasm together.
+-//!
+-//! (R1 shipped a generic `.scm`-query emitter here; R2 replaced it with the
+-//! bespoke per-language walker — see tsjs/ and the migration plan §3a — because
+-//! extraction parity needs logic queries can't express. New languages add a
+-//! grammar entry + a walker module.)
++//! P1: reduced to the MVP languages (each behind a cargo feature). `tsx` and
++//! `jsx` reuse another language's grammar exactly as upstream does.
+ 
+ use tree_sitter::Language;
+ 
+-// Vendored kotlin grammar (build.rs-compiled C — no usable crate exists;
+-// see grammars/kotlin and the kotlin checklist §Grammar prep).
++// Vendored kotlin grammar (build.rs-compiled C, no usable crate exists).
++#[cfg(feature = "lang-kotlin")]
+ extern "C" {
+     fn tree_sitter_kotlin() -> *const ();
+ }
+-// Vendored lua grammar (build.rs-compiled C — the wasm's v0.4.1 revision is
+-// not on crates.io; see grammars/lua and the lua-luau checklist).
+-extern "C" {
+-    fn tree_sitter_lua() -> *const ();
+-}
+-// Vendored scala grammar (build.rs-compiled C — the wasm and these sources are
+-// the v0.26.2 release; see grammars/scala and the scala checklist).
+-extern "C" {
+-    fn tree_sitter_scala() -> *const ();
+-}
+-// Vendored dart grammar (build.rs-compiled C — UserNobody14 d4d8f3e; the
+-// crates.io crate is a different-lineage fork; see grammars/dart).
+-extern "C" {
+-    fn tree_sitter_dart() -> *const ();
+-}
+-// Vendored swift grammar (build.rs-compiled C — crate 0.7.3's src/ with a
+-// one-line scanner fix the crate's own build lacks on Windows; see
+-// grammars/swift and docs/grammars/tree-sitter-swift.md).
+-extern "C" {
+-    fn tree_sitter_swift() -> *const ();
+-}
+ 
+-/// Languages this kernel binary can extract (reported by contractInfo;
+-/// TS-side routing policy decides what actually routes).
+-pub const LANGUAGES: [&str; 20] = [
+-    "typescript", "tsx", "javascript", "jsx", "java", "python", "go", "c", "cpp", "rust",
+-    "csharp", "ruby", "php", "swift", "kotlin", "r", "lua", "luau", "scala", "dart",
++/// Languages this kernel build can extract.
++pub const LANGUAGES: &[&str] = &[
++    #[cfg(feature = "lang-ts")]
++    "typescript",
++    #[cfg(feature = "lang-ts")]
++    "tsx",
++    #[cfg(feature = "lang-ts")]
++    "javascript",
++    #[cfg(feature = "lang-ts")]
++    "jsx",
++    #[cfg(feature = "lang-java")]
++    "java",
++    #[cfg(feature = "lang-python")]
++    "python",
++    #[cfg(feature = "lang-go")]
++    "go",
++    #[cfg(feature = "lang-rust")]
++    "rust",
++    #[cfg(feature = "lang-kotlin")]
++    "kotlin",
+ ];
+ 
+ pub fn grammar_for(language: &str) -> Option<Language> {
+     match language {
++        #[cfg(feature = "lang-ts")]
+         "typescript" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
++        #[cfg(feature = "lang-ts")]
+         "tsx" => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
++        #[cfg(feature = "lang-ts")]
+         "javascript" | "jsx" => Some(tree_sitter_javascript::LANGUAGE.into()),
++        #[cfg(feature = "lang-java")]
+         "java" => Some(tree_sitter_java::LANGUAGE.into()),
++        #[cfg(feature = "lang-python")]
+         "python" => Some(tree_sitter_python::LANGUAGE.into()),
++        #[cfg(feature = "lang-go")]
+         "go" => Some(tree_sitter_go::LANGUAGE.into()),
+-        // `.metal`/`.cu`/`.cuh` map to language 'cpp' at detectLanguage, so the
+-        // dialects ride this grammar too (their blanking pre-passes stay
+-        // TS-side — the route point applies preParse before the kernel call).
+-        "c" => Some(tree_sitter_c::LANGUAGE.into()),
+-        "cpp" => Some(tree_sitter_cpp::LANGUAGE.into()),
+-        // R7b: v0.24.2, sha-matched with the vendored wasm (grammars.ts).
++        #[cfg(feature = "lang-rust")]
+         "rust" => Some(tree_sitter_rust::LANGUAGE.into()),
+-        // R7b: 0.23.5, table-identical to the vendored ABI-15 wasm (#717;
+-        // verified against the crates.io tarball — csharp checklist header).
+-        "csharp" => Some(tree_sitter_c_sharp::LANGUAGE.into()),
+-        // R7b: v0.23.1, sha-matched with the vendored wasm (grammars.ts).
+-        // Content bump only — the tag's parser.c is still ABI 14.
+-        "ruby" => Some(tree_sitter_ruby::LANGUAGE.into()),
+-        // R7b: v0.24.2, the full HTML-interleaving variant — LANGUAGE_PHP,
+-        // NEVER LANGUAGE_PHP_ONLY (which errors on leading HTML).
+-        "php" => Some(tree_sitter_php::LANGUAGE_PHP.into()),
+-        // R7b: crate 0.7.3's src/, the sources the vendored wasm is built
+-        // from (table identity by construction; see grammars.ts), compiled in
+-        // build.rs with the scanner's `try!` fix (`1ULL << FAKE_TRY_BANG`).
+-        "swift" => {
+-            Some(unsafe { tree_sitter_language::LanguageFn::from_raw(tree_sitter_swift) }.into())
+-        }
+-        // R7b: fwcd 0.3.8, vendored C compiled in build.rs (crate unusable).
++        #[cfg(feature = "lang-kotlin")]
+         "kotlin" => {
+             Some(unsafe { tree_sitter_language::LanguageFn::from_raw(tree_sitter_kotlin) }.into())
+         }
+-        // R7b batch 4: crate =1.2.0, sha-identical to the r-lib v1.2.0 tag
+-        // the vendored wasm was built from (r checklist §Grammar prep).
+-        "r" => Some(tree_sitter_r::LANGUAGE.into()),
+-        // R7b batch 4: v0.4.1 vendored C compiled in build.rs (revision not
+-        // on crates.io — the wasm is the v0.4.1 tag, table-identical).
+-        "lua" => {
+-            Some(unsafe { tree_sitter_language::LanguageFn::from_raw(tree_sitter_lua) }.into())
+-        }
+-        // R7b batch 4: crate =1.2.0, sha-identical to the v1.2.0 tag the
+-        // vendored wasm was built from (lua-luau checklist §Grammar prep).
+-        "luau" => Some(tree_sitter_luau::LANGUAGE.into()),
+-        // R7b batch 4: vendored C compiled in build.rs, now the v0.26.2
+-        // release (#1823), kept byte-identical with the vendored wasm.
+-        "scala" => {
+-            Some(unsafe { tree_sitter_language::LanguageFn::from_raw(tree_sitter_scala) }.into())
+-        }
+-        // R7b batch 4: UserNobody14 d4d8f3e vendored C compiled in build.rs
+-        // (same commit as the byte-copied tree-sitter-wasms 0.1.13 artifact).
+-        "dart" => {
+-            Some(unsafe { tree_sitter_language::LanguageFn::from_raw(tree_sitter_dart) }.into())
+-        }
+         _ => None,
+     }
+ }
+diff -ruN a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs	2026-10-31 14:33:20.037659001 -0500
++++ b/src/lib.rs	2026-10-31 14:34:09.281661928 -0500
+@@ -1,25 +1,21 @@
+-//! codegraph-kernel — native extraction kernel (napi-rs).
++//! cg-kernel - the upstream CodeGraph extraction kernel with the napi boundary removed.
+ //!
+-//! Replaces ONLY the parse+extract walk inside the parse workers, behind the
+-//! existing `ExtractionResult` contract. Input `(filePath, content, language)`
+-//! per file; output flat typed buffers — one boundary crossing per file.
+-//! Everything downstream (resolution, synthesis, frameworks, MCP) is
+-//! untouched and consumes the decoded result exactly as before.
++//! Origin: `colbymchenry/codegraph` `codegraph-kernel/` (MIT, see THIRD_PARTY_NOTICES at
++//! the repository root and `UPSTREAM_COMMIT` next to this crate's manifest).
+ //!
+-//! Calls are synchronous by design: the existing `ParseWorkerPool` workers
+-//! already parallelize per-file, so each worker thread drives its own kernel
+-//! call (do NOT rebuild the pool on the Rust side — see the migration plan §3).
+-//!
+-//! Per-language extraction lives in a dedicated walker module (tsjs/ for
+-//! typescript/tsx/javascript/jsx) that mirrors the TS extractor for behavioral
+-//! parity — verified by scripts/kernel-parity.mjs and the §5 gate.
+-
+-#![deny(clippy::all)]
++//! Patch P1 replaces the napi entry points with the pure-Rust API below and puts
++//! each walker behind a cargo feature. The walkers themselves are untouched.
++//! Input is `(file path, source text, language)`; output is the five flat tables
++//! described in `buffers.rs` (ABI v2), one call per file.
++
++// Vendored code: keep upstream's style, silence lints that newer toolchains add.
++#![allow(clippy::all)]
++#![allow(dead_code, unused_imports, unused_variables, unused_mut)]
+ 
+ /// First statement of every recursive walker function (see stack.rs, #1581):
+-/// once the stack pointer is inside the red zone, stop descending — the
++/// once the stack pointer is inside the red zone, stop descending - the
+ /// latched flag makes `stack::run_guarded` discard the walk and defer the
+-/// file to wasm. `Default::default()` covers every walker return type in use
++/// file. `Default::default()` covers every walker return type in use
+ /// (`()`, `bool`, `Option<_>`, `String`); a hook returning `false` just sends
+ /// its caller down the generic child walk, whose own guard returns at once.
+ macro_rules! stack_guard {
+@@ -31,233 +27,132 @@
+ }
+ 
+ mod buffers;
+-mod ccpp;
+-mod cfnptr;
+-mod csharp;
+-mod dart;
+ mod docstring;
+ mod ids;
+-mod go;
+-mod java;
+-mod kotlin;
+ mod langs;
+-mod lua;
+-mod php;
+-mod rlang;
+-mod ruby;
+-mod rustlang;
+-mod scala;
+ mod stack;
+-mod swift;
+ mod textutil;
++
++#[cfg(feature = "lang-go")]
++mod go;
++#[cfg(feature = "lang-java")]
++mod java;
++#[cfg(feature = "lang-kotlin")]
++mod kotlin;
++#[cfg(feature = "lang-python")]
+ mod python;
++#[cfg(feature = "lang-rust")]
++mod rustlang;
++#[cfg(feature = "lang-ts")]
+ mod tsjs;
+ 
+-use napi::bindgen_prelude::*;
+-use napi_derive::napi;
++use std::cell::Cell;
++use std::fmt;
+ 
+-/// The five flat tables for one file. See buffers.rs for the byte layout;
+-/// `src/extraction/kernel/layout.ts` is the TS mirror.
+-#[napi(object)]
+-pub struct ExtractBuffers {
+-    pub meta: Buffer,
+-    pub nodes: Buffer,
+-    pub edges: Buffer,
+-    pub refs: Buffer,
+-    pub arena: Buffer,
+-}
+-
+-/// Wire-contract description — the TS loader verifies this against
+-/// src/types.ts before routing anything to the kernel, so an out-of-date
+-/// `.node` degrades to the wasm path instead of mis-decoding.
+-#[napi(object)]
+-pub struct ContractInfo {
+-    pub abi_version: u32,
+-    pub kernel_version: String,
+-    pub node_kinds: Vec<String>,
+-    pub edge_kinds: Vec<String>,
+-    /// Languages this binary can extract (routing is still TS-side policy).
+-    pub languages: Vec<String>,
++pub use buffers::{
++    EmitOut, EDGE_KINDS, EDGE_ROW_SIZE, FUNCTION_REF_CODE, KERNEL_ABI_VERSION, META_SIZE,
++    NODE_KINDS, NODE_ROW_SIZE, NONE, REF_FLAG_FILE_PATH, REF_ROW_SIZE,
++};
++
++/// Options for one extraction.
++#[derive(Debug, Clone, Copy)]
++pub struct ExtractOptions {
++    /// Keep walking a syntax tree that contains ERROR / MISSING nodes instead of
++    /// returning `defer:` (upstream hands such files to a wasm fallback that
++    /// cgr does not have). cgr defaults to `true`.
++    pub allow_error_trees: bool,
++}
++
++impl Default for ExtractOptions {
++    fn default() -> Self {
++        ExtractOptions { allow_error_trees: true }
++    }
+ }
+ 
+-/// Grammar identity for the grammar-source-parity gate: the wasm grammar and
+-/// the native grammar must expose identical node-kind/field tables, or
+-/// kernel-vs-fallback routing would be non-deterministic.
+-#[napi(object)]
+-pub struct GrammarInfo {
++/// Why an extraction produced no tables.
++#[derive(Debug, Clone)]
++pub enum KernelError {
++    /// Expected routing signal: the walker declined this file (error tree with
++    /// `allow_error_trees = false`, nesting too deep for the stack guard, ...).
++    Defer(String),
++    /// A real failure (unknown language, grammar load failure, ...).
++    Failed(String),
++}
++
++impl fmt::Display for KernelError {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            KernelError::Defer(m) | KernelError::Failed(m) => f.write_str(m),
++        }
++    }
++}
++
++impl std::error::Error for KernelError {}
++
++/// Wire-contract description, checked at startup against `cg-core`'s enums.
++#[derive(Debug, Clone)]
++pub struct ContractInfo {
+     pub abi_version: u32,
+-    pub node_kind_count: u32,
+-    pub field_count: u32,
+-    pub node_kinds: Vec<String>,
+-    pub field_names: Vec<String>,
++    pub kernel_version: &'static str,
++    pub node_kinds: &'static [&'static str],
++    pub edge_kinds: &'static [&'static str],
++    pub languages: &'static [&'static str],
+ }
+ 
+-#[napi]
+ pub fn contract_info() -> ContractInfo {
+     ContractInfo {
+         abi_version: buffers::KERNEL_ABI_VERSION as u32,
+-        kernel_version: env!("CARGO_PKG_VERSION").to_string(),
+-        node_kinds: buffers::NODE_KINDS.iter().map(|s| s.to_string()).collect(),
+-        edge_kinds: buffers::EDGE_KINDS.iter().map(|s| s.to_string()).collect(),
+-        languages: langs::LANGUAGES.iter().map(|s| s.to_string()).collect(),
++        kernel_version: env!("CARGO_PKG_VERSION"),
++        node_kinds: &buffers::NODE_KINDS,
++        edge_kinds: &buffers::EDGE_KINDS,
++        languages: langs::LANGUAGES,
+     }
+ }
+ 
+-#[napi]
+-pub fn grammar_info(language: String) -> Option<GrammarInfo> {
+-    let lang = langs::grammar_for(&language)?;
+-    let node_kind_count = lang.node_kind_count();
+-    let field_count = lang.field_count();
+-    let node_kinds = (0..node_kind_count)
+-        .map(|i| lang.node_kind_for_id(i as u16).unwrap_or("").to_string())
+-        .collect();
+-    // Field ids are 1-based in tree-sitter.
+-    let field_names = (1..=field_count)
+-        .map(|i| lang.field_name_for_id(i as u16).unwrap_or("").to_string())
+-        .collect();
+-    Some(GrammarInfo {
+-        abi_version: lang.abi_version() as u32,
+-        node_kind_count: node_kind_count as u32,
+-        field_count: field_count as u32,
+-        node_kinds,
+-        field_names,
+-    })
+-}
+-
+-/// One struct node's extent for the cFnPtr sweep (mirror of the TS caller's
+-/// `{ id, startLine, endLine }`, with `endLine ?? startLine` applied TS-side).
+-#[napi(object)]
+-pub struct CfnptrStructIn {
+-    pub id: String,
+-    pub start_line: u32,
+-    pub end_line: u32,
+-}
+-
+-#[napi(object)]
+-pub struct CfnptrFileIn {
+-    /// RAW file text, exactly as the resolver's readFile returned it.
+-    pub text: String,
+-    pub structs: Vec<CfnptrStructIn>,
+-}
+-
+-#[napi(object)]
+-pub struct CfnptrField {
+-    pub name: String,
+-    pub index: u32,
+-    pub ptr: bool,
+-    #[napi(js_name = "type")]
+-    pub ty: String,
+-}
+-
+-#[napi(object)]
+-pub struct CfnptrStructOut {
+-    pub id: String,
+-    pub parsed: bool,
+-    pub fields: Vec<CfnptrField>,
+-}
+-
+-/// The cFnPtr extraction-sweep facts for one file — see cfnptr.rs (and the
+-/// TS synthesizer's `FileFacts`) for field semantics.
+-#[napi(object)]
+-pub struct CfnptrFacts {
+-    pub fn_ptr_typedefs: Vec<String>,
+-    pub fn_type_typedefs: Vec<String>,
+-    pub structs: Vec<CfnptrStructOut>,
+-    pub inline_ptr: bool,
+-    pub inline_types: Vec<String>,
+-    pub inline_tags: Vec<String>,
+-    pub init_tokens: Vec<String>,
+-    pub array_elems: Vec<String>,
+-    pub alias_names: Vec<String>,
+-    pub d_pairs: Vec<String>,
+-    pub dispatch_fields: Vec<String>,
+-    pub array_dispatch_names: Vec<String>,
+-    pub includes: Vec<String>,
+-}
+-
+-/// Batched cFnPtr extraction sweep (task #5 step 2): one call scans a batch
+-/// of files and returns their collected facts, amortizing the NAPI boundary.
+-/// Feature-detected by the TS loader — absent on older binaries, where the
+-/// synthesizer keeps its JS sweep.
+-#[napi]
+-pub fn cfnptr_scan_files(files: Vec<CfnptrFileIn>) -> Vec<CfnptrFacts> {
+-    files
+-        .into_iter()
+-        .map(|f| {
+-            let structs: Vec<cfnptr::StructExtent> = f
+-                .structs
+-                .into_iter()
+-                .map(|s| cfnptr::StructExtent { id: s.id, start_line: s.start_line, end_line: s.end_line })
+-                .collect();
+-            let facts = cfnptr::scan_file(&f.text, &structs);
+-            CfnptrFacts {
+-                fn_ptr_typedefs: facts.fn_ptr_typedefs,
+-                fn_type_typedefs: facts.fn_type_typedefs,
+-                structs: facts
+-                    .structs
+-                    .into_iter()
+-                    .map(|s| CfnptrStructOut {
+-                        id: s.id,
+-                        parsed: s.parsed,
+-                        fields: s
+-                            .fields
+-                            .into_iter()
+-                            .map(|fl| CfnptrField { name: fl.name, index: fl.index, ptr: fl.ptr, ty: fl.ty })
+-                            .collect(),
+-                    })
+-                    .collect(),
+-                inline_ptr: facts.inline_ptr,
+-                inline_types: facts.inline_types,
+-                inline_tags: facts.inline_tags,
+-                init_tokens: facts.init_tokens,
+-                array_elems: facts.array_elems,
+-                alias_names: facts.alias_names,
+-                d_pairs: facts.d_pairs,
+-                dispatch_fields: facts.dispatch_fields,
+-                array_dispatch_names: facts.array_dispatch_names,
+-                includes: facts.includes,
+-            }
+-        })
+-        .collect()
+-}
+-
+-/// Debug/differential hook: the native `stripCommentsForRegex(text, 'c')`.
+-/// Exists so the strip differential oracle can pin the Rust stripper against
+-/// the TS reference directly.
+-#[napi]
+-pub fn cfnptr_strip_c(text: String) -> String {
+-    String::from_utf8_lossy(&cfnptr::strip_c(text.as_bytes())).into_owned()
+-}
+-
+-#[napi]
+-pub fn extract_file(file_path: String, content: String, language: String) -> Result<ExtractBuffers> {
+-    // The whole walk runs under the stack guard (stack.rs, #1581): a file
+-    // nested deeply enough to overflow this thread's stack comes back as a
+-    // `defer:` error — the TS side's routine "take the wasm path" signal —
+-    // instead of a SIGSEGV that kills the entire indexer process.
+-    let out = stack::run_guarded(|| match language.as_str() {
+-        "java" => java::extract(&file_path, &content),
+-        "python" => python::extract(&file_path, &content),
+-        "go" => go::extract(&file_path, &content),
+-        "c" | "cpp" => ccpp::extract(&file_path, &content, &language),
+-        "rust" => rustlang::extract(&file_path, &content),
+-        "csharp" => csharp::extract(&file_path, &content),
+-        "ruby" => ruby::extract(&file_path, &content),
+-        "php" => php::extract(&file_path, &content),
+-        "swift" => swift::extract(&file_path, &content),
+-        "kotlin" => kotlin::extract(&file_path, &content),
+-        "r" => rlang::extract(&file_path, &content),
+-        "lua" | "luau" => lua::extract(&file_path, &content, &language),
+-        "scala" => scala::extract(&file_path, &content),
+-        "dart" => dart::extract(&file_path, &content),
+-        _ => tsjs::extract(&file_path, &content, &language),
+-    })
+-    .map_err(Error::from_reason)?;
+-    Ok(ExtractBuffers {
+-        meta: out.meta.into(),
+-        nodes: out.nodes.into(),
+-        edges: out.edges.into(),
+-        refs: out.refs.into(),
+-        arena: out.arena.into(),
++/// Whether this build can extract `language`.
++pub fn supports(language: &str) -> bool {
++    langs::LANGUAGES.contains(&language)
++}
++
++thread_local! {
++    static ALLOW_ERROR_TREES: Cell<bool> = const { Cell::new(false) };
++}
++
++/// Read by the walkers (patch P2) at their `has_error()` checkpoint.
++pub(crate) fn allow_error_trees() -> bool {
++    ALLOW_ERROR_TREES.with(|c| c.get())
++}
++
++/// Extract one file. The whole walk runs under the stack guard (stack.rs, #1581):
++/// a file nested deeply enough to overflow this thread's stack comes back as
++/// `KernelError::Defer` instead of a SIGSEGV.
++pub fn extract_file(
++    path: &str,
++    src: &str,
++    language: &str,
++    opts: &ExtractOptions,
++) -> Result<EmitOut, KernelError> {
++    ALLOW_ERROR_TREES.with(|c| c.set(opts.allow_error_trees));
++    let out = stack::run_guarded(|| match language {
++        #[cfg(feature = "lang-java")]
++        "java" => java::extract(path, src),
++        #[cfg(feature = "lang-python")]
++        "python" => python::extract(path, src),
++        #[cfg(feature = "lang-go")]
++        "go" => go::extract(path, src),
++        #[cfg(feature = "lang-rust")]
++        "rust" => rustlang::extract(path, src),
++        #[cfg(feature = "lang-kotlin")]
++        "kotlin" => kotlin::extract(path, src),
++        #[cfg(feature = "lang-ts")]
++        "typescript" | "tsx" | "javascript" | "jsx" => tsjs::extract(path, src, language),
++        other => Err(format!("unsupported language: {other}")),
++    });
++    out.map_err(|e| {
++        if e.starts_with("defer:") {
++            KernelError::Defer(e)
++        } else {
++            KernelError::Failed(e)
++        }
+     })
+ }
+diff -ruN a/src/stack.rs b/src/stack.rs
+--- a/src/stack.rs	2026-10-31 14:33:20.025659000 -0500
++++ b/src/stack.rs	2026-10-31 14:33:54.406766037 -0500
+@@ -198,14 +198,13 @@
+             .expect("walker thread panicked")
+     }
+ 
++    #[allow(dead_code)]
+     fn nested_parens(prefix: &str, suffix: &str) -> String {
+         format!("{prefix}{}1{}{suffix}", "(".repeat(DEPTH), ")".repeat(DEPTH))
+     }
+ 
+     #[test]
+     fn os_bounds_are_sane_on_this_platform() {
+-        // Every shipped target has an OS implementation; the fallback budget
+-        // is only for platforms the kernel is not built for.
+         let low = os_stack_low().expect("OS stack bounds available");
+         let sp = current_sp();
+         assert!(low < sp, "stack low {low:#x} must be below the current sp {sp:#x}");
+@@ -217,9 +216,6 @@
+         on_small_stack(|| {
+             let low = os_stack_low().expect("OS stack bounds available");
+             let used = current_sp() - low;
+-            // std/the OS round the requested size up a little (macOS reports
+-            // 1,060,864 for a 1 MiB request); the point is that the bounds
+-            // describe THIS thread's small stack, not the main thread's.
+             assert!(
+                 used <= SMALL_STACK + 128 * 1024,
+                 "used {used} is not within the {SMALL_STACK}-byte stack"
+@@ -227,20 +223,11 @@
+         });
+     }
+ 
++    #[cfg(all(feature = "lang-rust", feature = "lang-ts", feature = "lang-python"))]
+     #[test]
+-    fn deep_braces_c_defer_instead_of_crashing() {
+-        let src = format!("void foo(void) {{\n{}{}\n}}\n", "{".repeat(DEPTH), "}".repeat(DEPTH));
+-        let r = on_small_stack(move || run_guarded(|| crate::ccpp::extract("deep.c", &src, "c")));
+-        let err = r.err().expect("deep nesting must defer");
+-        assert!(err.starts_with("defer:"), "unexpected error: {err}");
+-    }
+-
+-    type Extract = fn(&str) -> Result<crate::buffers::EmitOut, String>;
+-
+-    #[test]
+-    fn deep_parens_cpp_rust_ts_python_defer_instead_of_crashing() {
+-        let cases: [(&str, Extract, String); 4] = [
+-            ("deep.cpp", |s| crate::ccpp::extract("deep.cpp", s, "cpp"), nested_parens("int f() { return ", "; }\n")),
++    fn deep_parens_rust_ts_python_defer_instead_of_crashing() {
++        type Extract = fn(&str) -> Result<crate::buffers::EmitOut, String>;
++        let cases: [(&str, Extract, String); 3] = [
+             ("deep.rs", |s| crate::rustlang::extract("deep.rs", s), nested_parens("fn f() -> i32 { ", " }\n")),
+             ("deep.ts", |s| crate::tsjs::extract("deep.ts", s, "typescript"), nested_parens("function f() { return ", "; }\n")),
+             ("deep.py", |s| crate::python::extract("deep.py", s), nested_parens("def f():\n    return ", "\n")),
+@@ -252,21 +239,22 @@
+         }
+     }
+ 
++    #[cfg(feature = "lang-rust")]
+     #[test]
+     fn normal_files_are_untouched_by_the_guard() {
+-        let src = "int add(int a, int b) { return a + b; }\nint main(void) { return add(1, 2); }\n";
+-        let r = on_small_stack(move || run_guarded(|| crate::ccpp::extract("ok.c", src, "c")));
++        let src = "fn add(a: i32, b: i32) -> i32 { a + b }\nfn main() { add(1, 2); }\n";
++        let r = on_small_stack(move || run_guarded(|| crate::rustlang::extract("ok.rs", src)));
+         assert!(r.is_ok(), "a shallow file must not defer: {:?}", r.err());
+         assert!(!overflowed());
+     }
+ 
++    #[cfg(feature = "lang-rust")]
+     #[test]
+     fn latch_resets_between_runs() {
+-        let deep = format!("void foo(void) {{\n{}{}\n}}\n", "{".repeat(DEPTH), "}".repeat(DEPTH));
++        let deep = nested_parens("fn f() -> i32 { ", " }\n");
+         on_small_stack(move || {
+-            assert!(run_guarded(|| crate::ccpp::extract("deep.c", &deep, "c")).is_err());
+-            // The latch from the deep file must not poison the next, shallow one.
+-            let ok = run_guarded(|| crate::ccpp::extract("ok.c", "int x;\n", "c"));
++            assert!(run_guarded(|| crate::rustlang::extract("deep.rs", &deep)).is_err());
++            let ok = run_guarded(|| crate::rustlang::extract("ok.rs", "fn x() {}\n"));
+             assert!(ok.is_ok(), "latch leaked into the next run: {:?}", ok.err());
+         });
+     }

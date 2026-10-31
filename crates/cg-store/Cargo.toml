@@ -1,0 +1,28 @@
+[package]
+name = "cg-store"
+description = "Immutable mmap snapshots: segment format, builder, View, manifest, locks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cg-core = { workspace = true }
+cg-extract = { workspace = true }
+bytemuck = { workspace = true }
+memmap2 = { workspace = true }
+fst = { workspace = true }
+rayon = { workspace = true }
+rustc-hash = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+smallvec = { workspace = true }
+memchr = { workspace = true }
+tracing = { workspace = true }
+xxhash-rust = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+proptest = { workspace = true }

@@ -1,0 +1,17 @@
+[package]
+name = "cg-core"
+description = "Shared types for codegraph-rust: kinds, ids, memory budget, project config, errors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bytemuck = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+xxhash-rust = { workspace = true }
+rustc-hash = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }

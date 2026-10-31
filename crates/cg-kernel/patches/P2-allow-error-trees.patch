@@ -1,0 +1,72 @@
+diff -ruN a/src/go.rs b/src/go.rs
+--- a/src/go.rs	2026-10-31 14:33:20.321641602 -0500
++++ b/src/go.rs	2026-10-31 14:34:43.276537284 -0500
+@@ -114,7 +114,7 @@
+     let tree = parser
+         .parse(source, None)
+         .ok_or_else(|| "parser returned null tree".to_string())?;
+-    if tree.root_node().has_error() {
++    if tree.root_node().has_error() && !crate::allow_error_trees() {
+         return Err("defer: parse tree contains errors — wasm recovery is canonical".to_string());
+     }
+ 
+diff -ruN a/src/java.rs b/src/java.rs
+--- a/src/java.rs	2026-10-31 14:33:20.321319595 -0500
++++ b/src/java.rs	2026-10-31 14:34:43.275376943 -0500
+@@ -153,7 +153,7 @@
+     let tree = parser
+         .parse(source, None)
+         .ok_or_else(|| "parser returned null tree".to_string())?;
+-    if tree.root_node().has_error() {
++    if tree.root_node().has_error() && !crate::allow_error_trees() {
+         return Err("defer: parse tree contains errors — wasm recovery is canonical".to_string());
+     }
+ 
+diff -ruN a/src/kotlin.rs b/src/kotlin.rs
+--- a/src/kotlin.rs	2026-10-31 14:33:20.322260460 -0500
++++ b/src/kotlin.rs	2026-10-31 14:34:43.278713366 -0500
+@@ -236,7 +236,7 @@
+     let tree = parser
+         .parse(source, None)
+         .ok_or_else(|| "parser returned null tree".to_string())?;
+-    if tree.root_node().has_error() {
++    if tree.root_node().has_error() && !crate::allow_error_trees() {
+         // Includes the PHANTOM errors (complete CSTs with hasError set) and
+         // every fun-interface misparse — trust the flag, wasm is canonical.
+         return Err("defer: parse tree contains errors — wasm recovery is canonical".to_string());
+diff -ruN a/src/python.rs b/src/python.rs
+--- a/src/python.rs	2026-10-31 14:33:20.321595902 -0500
++++ b/src/python.rs	2026-10-31 14:34:43.276203695 -0500
+@@ -164,7 +164,7 @@
+     let tree = parser
+         .parse(source, None)
+         .ok_or_else(|| "parser returned null tree".to_string())?;
+-    if tree.root_node().has_error() {
++    if tree.root_node().has_error() && !crate::allow_error_trees() {
+         return Err("defer: parse tree contains errors — wasm recovery is canonical".to_string());
+     }
+ 
+diff -ruN a/src/rustlang.rs b/src/rustlang.rs
+--- a/src/rustlang.rs	2026-10-31 14:33:20.321908827 -0500
++++ b/src/rustlang.rs	2026-10-31 14:34:43.277523545 -0500
+@@ -143,7 +143,7 @@
+     let tree = parser
+         .parse(source, None)
+         .ok_or_else(|| "parser returned null tree".to_string())?;
+-    if tree.root_node().has_error() {
++    if tree.root_node().has_error() && !crate::allow_error_trees() {
+         return Err("defer: parse tree contains errors — wasm recovery is canonical".to_string());
+     }
+ 
+diff -ruN a/src/tsjs/mod.rs b/src/tsjs/mod.rs
+--- a/src/tsjs/mod.rs	2026-10-31 14:33:20.322607556 -0500
++++ b/src/tsjs/mod.rs	2026-10-31 14:34:43.279016973 -0500
+@@ -245,7 +245,7 @@
+     // type annotation). Erroring files are rare (0-0.42% across express/
+     // excalidraw/vscode) and per-file wasm fallback keeps routing graph-neutral
+     // by construction; clean files — 99.6%+ — stay on the fast path.
+-    if tree.root_node().has_error() {
++    if tree.root_node().has_error() && !crate::allow_error_trees() {
+         return Err("defer: parse tree contains errors — wasm recovery is canonical".to_string());
+     }
+ 

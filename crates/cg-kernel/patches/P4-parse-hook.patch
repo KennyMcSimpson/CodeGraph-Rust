@@ -1,0 +1,173 @@
+diff -ruN a/src/go.rs b/src/go.rs
+--- a/src/go.rs	2026-10-31 14:34:43.276537284 -0500
++++ b/src/go.rs	2026-10-31 14:34:43.422735651 -0500
+@@ -111,8 +111,7 @@
+     parser
+         .set_language(&grammar)
+         .map_err(|e| format!("set_language(go) failed: {e}"))?;
+-    let tree = parser
+-        .parse(source, None)
++    let tree = crate::hooks::parse(&mut parser, source)
+         .ok_or_else(|| "parser returned null tree".to_string())?;
+     if tree.root_node().has_error() && !crate::allow_error_trees() {
+         return Err("defer: parse tree contains errors — wasm recovery is canonical".to_string());
+diff -ruN a/src/hooks.rs b/src/hooks.rs
+--- a/src/hooks.rs	1969-12-31 18:00:00.000000000 -0600
++++ b/src/hooks.rs	2026-10-31 15:05:57.565775362 -0500
+@@ -0,0 +1,80 @@
++//! Patch P4 - parse hook.
++//!
++//! Every walker parses through [`parse`], which
++//!  1. enforces the per-file parse timeout (design doc 4.4) with tree-sitter's
++//!     progress callback, and
++//!  2. stashes a clone of the finished syntax tree in a thread-local so that
++//!     `cg-extract` can build the facts tables (imports, exports, scopes,
++//!     bindings: design doc 6.1) from the SAME parse instead of parsing twice.
++//!
++//! A `Tree` clone is a reference-count bump, so the stash is free.
++
++use std::cell::{Cell, RefCell};
++use std::time::{Duration, Instant};
++use tree_sitter::{ParseOptions, Parser, Tree};
++
++thread_local! {
++    static STASH: RefCell<Option<Tree>> = const { RefCell::new(None) };
++    static TIMEOUT: Cell<Option<Duration>> = const { Cell::new(None) };
++    static TIMED_OUT: Cell<bool> = const { Cell::new(false) };
++}
++
++/// Per-thread parse deadline for the next extractions (`None` = unlimited).
++pub fn set_parse_timeout(limit: Option<Duration>) {
++    TIMEOUT.with(|c| c.set(limit));
++}
++
++/// The syntax tree of the most recent successful parse on this thread.
++pub fn take_tree() -> Option<Tree> {
++    STASH.with(|s| s.borrow_mut().take())
++}
++
++/// Whether the most recent parse on this thread was cancelled by the timeout.
++pub fn parse_timed_out() -> bool {
++    TIMED_OUT.with(|c| c.get())
++}
++
++/// Drop any stashed tree (call after a failed extraction).
++pub fn clear() {
++    STASH.with(|s| *s.borrow_mut() = None);
++}
++
++pub(crate) fn parse(parser: &mut Parser, source: &str) -> Option<Tree> {
++    STASH.with(|s| *s.borrow_mut() = None);
++    TIMED_OUT.with(|c| c.set(false));
++    let bytes = source.as_bytes();
++    let tree = match TIMEOUT.with(|c| c.get()) {
++        None => parser.parse(bytes, None),
++        Some(limit) => {
++            let deadline = Instant::now() + limit;
++            let mut expired = false;
++            let mut progress = |_: &tree_sitter::ParseState| {
++                if Instant::now() >= deadline {
++                    expired = true;
++                    true // cancel
++                } else {
++                    false
++                }
++            };
++            let tree = parser.parse_with_options(
++                &mut |offset, _| if offset < bytes.len() { &bytes[offset..] } else { &[][..] },
++                None,
++                Some(ParseOptions::new().progress_callback(&mut progress)),
++            );
++            if expired {
++                TIMED_OUT.with(|c| c.set(true));
++            }
++            tree
++        }
++    };
++    if let Some(t) = &tree {
++        STASH.with(|s| *s.borrow_mut() = Some(t.clone()));
++    }
++    tree
++}
++
++/// The tree-sitter grammar the kernel uses for `lang` (tests and dev tools; the facts
++/// extractor never needs it because it reuses the kernel's tree).
++pub fn language(lang: &str) -> Option<tree_sitter::Language> {
++    crate::langs::grammar_for(lang)
++}
+diff -ruN a/src/java.rs b/src/java.rs
+--- a/src/java.rs	2026-10-31 14:34:43.275376943 -0500
++++ b/src/java.rs	2026-10-31 14:34:43.421798727 -0500
+@@ -150,8 +150,7 @@
+     parser
+         .set_language(&grammar)
+         .map_err(|e| format!("set_language(java) failed: {e}"))?;
+-    let tree = parser
+-        .parse(source, None)
++    let tree = crate::hooks::parse(&mut parser, source)
+         .ok_or_else(|| "parser returned null tree".to_string())?;
+     if tree.root_node().has_error() && !crate::allow_error_trees() {
+         return Err("defer: parse tree contains errors — wasm recovery is canonical".to_string());
+diff -ruN a/src/kotlin.rs b/src/kotlin.rs
+--- a/src/kotlin.rs	2026-10-31 14:34:43.278713366 -0500
++++ b/src/kotlin.rs	2026-10-31 14:34:43.424543778 -0500
+@@ -233,8 +233,7 @@
+     parser
+         .set_language(&grammar)
+         .map_err(|e| format!("set_language(kotlin) failed: {e}"))?;
+-    let tree = parser
+-        .parse(source, None)
++    let tree = crate::hooks::parse(&mut parser, source)
+         .ok_or_else(|| "parser returned null tree".to_string())?;
+     if tree.root_node().has_error() && !crate::allow_error_trees() {
+         // Includes the PHANTOM errors (complete CSTs with hasError set) and
+diff -ruN a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs	2026-10-31 14:34:43.153095393 -0500
++++ b/src/lib.rs	2026-10-31 14:34:43.425784492 -0500
+@@ -28,6 +28,7 @@
+ 
+ mod buffers;
+ mod docstring;
++pub mod hooks;
+ mod ids;
+ mod langs;
+ mod stack;
+diff -ruN a/src/python.rs b/src/python.rs
+--- a/src/python.rs	2026-10-31 14:34:43.276203695 -0500
++++ b/src/python.rs	2026-10-31 14:34:43.422289538 -0500
+@@ -161,8 +161,7 @@
+     parser
+         .set_language(&grammar)
+         .map_err(|e| format!("set_language(python) failed: {e}"))?;
+-    let tree = parser
+-        .parse(source, None)
++    let tree = crate::hooks::parse(&mut parser, source)
+         .ok_or_else(|| "parser returned null tree".to_string())?;
+     if tree.root_node().has_error() && !crate::allow_error_trees() {
+         return Err("defer: parse tree contains errors — wasm recovery is canonical".to_string());
+diff -ruN a/src/rustlang.rs b/src/rustlang.rs
+--- a/src/rustlang.rs	2026-10-31 14:34:43.277523545 -0500
++++ b/src/rustlang.rs	2026-10-31 14:34:43.423598320 -0500
+@@ -140,8 +140,7 @@
+     parser
+         .set_language(&grammar)
+         .map_err(|e| format!("set_language(rust) failed: {e}"))?;
+-    let tree = parser
+-        .parse(source, None)
++    let tree = crate::hooks::parse(&mut parser, source)
+         .ok_or_else(|| "parser returned null tree".to_string())?;
+     if tree.root_node().has_error() && !crate::allow_error_trees() {
+         return Err("defer: parse tree contains errors — wasm recovery is canonical".to_string());
+diff -ruN a/src/tsjs/mod.rs b/src/tsjs/mod.rs
+--- a/src/tsjs/mod.rs	2026-10-31 14:34:43.279016973 -0500
++++ b/src/tsjs/mod.rs	2026-10-31 14:34:43.424937218 -0500
+@@ -232,8 +232,7 @@
+     parser
+         .set_language(&grammar)
+         .map_err(|e| format!("set_language({language}) failed: {e}"))?;
+-    let tree = parser
+-        .parse(source, None)
++    let tree = crate::hooks::parse(&mut parser, source)
+         .ok_or_else(|| "parser returned null tree".to_string())?;
+ 
+     // Files with parse ERRORS defer to the wasm extractor (the `defer:` prefix

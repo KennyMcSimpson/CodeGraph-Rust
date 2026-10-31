@@ -1,0 +1,25 @@
+[package]
+name = "cg-extract"
+description = "Extraction pipeline: kernel calls, decoding, post-processing, facts tables"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cg-core = { workspace = true }
+cg-kernel = { workspace = true, features = ["lang-ts", "lang-python", "lang-go", "lang-java", "lang-rust", "lang-kotlin"] }
+cg-scan = { workspace = true }
+tree-sitter = { workspace = true }
+rayon = { workspace = true }
+regex = { workspace = true }
+rustc-hash = { workspace = true }
+serde_json = { workspace = true }
+smallvec = { workspace = true }
+tracing = { workspace = true }
+memchr = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

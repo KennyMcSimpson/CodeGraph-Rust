@@ -1,0 +1,108 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cg-core",
+    "crates/cg-kernel",
+    "crates/cg-scan",
+    "crates/cg-extract",
+    "crates/cg-store",
+    "crates/cg-resolve",
+    "crates/cg-query",
+    "crates/cg-sync",
+    "crates/cg-mcp",
+    "crates/cg-install",
+    "crates/cgr",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/NianJiuZst/CodeGrap-Rust"
+rust-version = "1.89"
+
+# Dependency whitelist: design doc 3.4. New entries need a reason in the PR.
+[workspace.dependencies]
+# internal
+cg-core = { path = "crates/cg-core" }
+cg-kernel = { path = "crates/cg-kernel", default-features = false }
+cg-scan = { path = "crates/cg-scan" }
+cg-extract = { path = "crates/cg-extract" }
+cg-store = { path = "crates/cg-store" }
+cg-resolve = { path = "crates/cg-resolve" }
+cg-query = { path = "crates/cg-query" }
+cg-sync = { path = "crates/cg-sync" }
+cg-mcp = { path = "crates/cg-mcp" }
+cg-install = { path = "crates/cg-install" }
+# parsing
+tree-sitter = "0.25"
+sha2 = "0.10"
+regex = "1"
+# parallelism
+rayon = "1"
+crossbeam-channel = "0.5"
+arc-swap = "1"
+# files (cross-platform file locks come from std::fs::File since 1.89, so fs4 is not needed)
+ignore = "0.4"
+globset = "0.4"
+memmap2 = "0.9"
+notify = "8"
+tempfile = "3"
+# data
+bytemuck = { version = "1", features = ["derive", "extern_crate_alloc"] }
+fst = { version = "0.4", features = ["levenshtein"] }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+memchr = "2"
+aho-corasick = "1"
+rustc-hash = "2"
+smallvec = "1"
+# service
+tokio = { version = "1", features = ["rt", "io-std", "io-util", "sync", "time", "macros", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# tooling
+clap = { version = "4", features = ["derive"] }
+toml_edit = "0.25"
+jsonc-parser = { version = "0.34", features = ["cst", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "2"
+mimalloc = "0.1"
+libc = "0.2"
+# dev only
+rusqlite = { version = "0.41", features = ["bundled"] }
+insta = "1"
+proptest = "1"
+criterion = "0.8"
+
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+# The grammar C code and the hot data-structure crates are always optimised: debug
+# builds of tree-sitter are too slow for the test corpus (design doc 11.4).
+[profile.dev.package."*"]
+opt-level = 2
+[profile.dev.package.cg-kernel]
+opt-level = 2
+
+[profile.test]
+opt-level = 1
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+strip = true
+# Crash isolation (design doc 4.4, catch_unwind per file) depends on unwinding.
+panic = "unwind"
+
+# Fast optimised profile for local benchmarking / CI smoke runs: same code as
+# release, minutes less link time. Numbers quoted in the docs say which profile.
+[profile.fastrel]
+inherits = "release"
+lto = false
+codegen-units = 16
+strip = false
+debug = "line-tables-only"
