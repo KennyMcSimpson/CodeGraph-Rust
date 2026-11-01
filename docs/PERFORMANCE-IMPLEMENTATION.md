@@ -6,8 +6,11 @@
 
 This update implements the next engine performance work from the technical design. It follows
 the design's correctness rule: an incremental graph must match a fresh full build. The previous
-upstream comparison in [BENCHMARKS.md](BENCHMARKS.md) measured `fcc59af`; it does **not** measure
-the changes described here.
+upstream comparison in [the historical report](BENCHMARKS-HISTORICAL.md) measured `fcc59af`;
+it does **not** measure the changes described here. The subsequent
+[main retest and oracle report](BENCHMARKS.md) measures `b827b1d`: **4.95×** geometric-mean
+full-index speedup and **5.73×** warm-query P50 speedup over the pinned upstream revision.
+The strict graph-agreement gate remains unmet in all four samples.
 
 ### Implemented changes
 
@@ -73,15 +76,21 @@ Linux/macOS/Windows unit/integration tests and end-to-end smoke, lint, kernel re
 and a static musl build. Windows passed 137 tests with one ignored. Local/hosted checks use
 Rust 1.99; the retained before/after release binaries use the same local Rust 1.94.1 toolchain.
 
-The guarded performance run was **refused before starting**. The initial preflight reported
+At implementation completion, the guarded performance run was **refused before starting**.
+The initial preflight reported
 4,233 MiB available memory, 1,559 MiB swap and 40,800 MiB free disk. A repeat after the final
 release build at that stage reported 5,889 MiB available memory, 977 MiB swap and 39,027 MiB free disk;
 available memory still fell below the required 6,144 MiB (swap must be below 1,024 MiB and free
 disk at least 20,480 MiB).
-Protection thresholds were not relaxed. No new speedup percentage, latency target or large-repo
-RSS guarantee is claimed for this update. The earlier **6.40×** result remains historical.
+Protection thresholds were not relaxed, and no new speedup was published at that stage.
+After the branch was merged and memory was released, the subsequent restricted-tier main
+retest completed **128 timed commands** and full upstream edge comparisons; both implementations'
+restored edge sets matched their initial sets, and all four `cgr` checksum/full-build checks passed.
+See [the new report](BENCHMARKS.md) for measured medians, raw samples and oracle failures.
+Standard-tier, concurrent-reader and large-repository RSS acceptance remain outside that run.
+The earlier **6.40×** result remains historical and uses a different protocol.
 
-To collect a new baseline, use separate corpus/output directories for old and new binaries,
+To isolate before/after effects of these optimizations, use separate corpus/output directories for old and new binaries,
 the same release profile and thread/memory settings, and the protected wrapper. For example:
 
 ```sh
@@ -118,7 +127,9 @@ the source checkout.
 ## 简体中文
 
 本轮依据技术设计落地引擎性能优化，并继续以“增量结果等于全量重建”为正确性约束。
-[历史 benchmark](BENCHMARKS.md) 测量的是 `fcc59af`，**不包含本轮新增优化**。
+[历史 benchmark](BENCHMARKS-HISTORICAL.md) 测量的是 `fcc59af`，**不包含本轮新增优化**。
+合并后的 `b827b1d` 已完成[main 性能复测与 oracle 对比](BENCHMARKS.md)：全量索引加速比几何平均
+**4.95×**、热查询 P50 加速比几何平均 **5.73×**。四个样本的严格图谱一致率门槛仍未通过。
 
 ### 已落地的优化
 
@@ -165,12 +176,15 @@ Express（142 文件）、Gin（99）、Tokio（814）、Django（2,984）的独
 内核来源复现及静态 musl 构建。Windows 同样为 137 通过、1 忽略。最终本机/远程检查使用 Rust 1.99；
 保留的新旧 release 二进制均使用本机 Rust 1.94.1 构建。
 
-正式性能复测在启动前被保护脚本拒绝。首次读数为可用内存 **4,233 MiB**、Swap **1,559 MiB**、
+开发交付时，正式性能复测在启动前被保护脚本拒绝。首次读数为可用内存 **4,233 MiB**、Swap **1,559 MiB**、
 空闲磁盘 **40,800 MiB**；当阶段 release 编译后重试，读数为 **5,889 MiB / 977 MiB / 39,027 MiB**。
 重试仍未达到可用内存至少 **6,144 MiB** 的要求；Swap 必须低于 **1,024 MiB**，空闲磁盘至少 **20,480 MiB**。
-保护阈值保持原值。因此本轮没有新增可发布的加速百分比、延迟达标结论或大仓库 RSS 保证；历史
-**6.40×** 仍只属于原被测版本。资源条件满足后，按上方命令在独立目录逐一测旧、新二进制，保留相同的
-源码、release 配置与线程/内存档位，同时检查覆盖度和返回内容，再比较中位数、分位数、段大小与 RSS。
+当时保护阈值保持原值，因此没有发布新增性能数字。分支合并、释放内存后，已完成受限档的
+**128 次计时命令**及完整边 oracle 对比：双方恢复后的严格边集合均与初始集合相同，四个 `cgr`
+项目的校验和及增量/全量检查全部通过。实测中位数、原始采样与未通过的 oracle 门槛见[新报告](BENCHMARKS.md)。
+标准档、并发读者与大仓库 RSS 验收不在本轮范围内。历史 **6.40×** 的协议不同，仍只属于原被测版本。
+要单独量化此次优化前后的收益，可按上方命令在独立目录逐一测旧、新二进制，保留相同源码、release 配置与
+线程/内存档位，同时检查覆盖度和返回内容，再比较中位数、分位数、段大小与 RSS。
 
 ### 仍需继续推进的边界
 

@@ -58,61 +58,89 @@ differs from upstream; see [current limitations](#current-limitations).
 
 ## Measured performance
 
-In a local comparison on **2026-11-01**, `cgr` achieved a **6.40× geometric-mean full-index
-speedup** across four repositories, with **86.2%–91.1% lower peak indexing RSS** than upstream
-CodeGraph. Both versions indexed the same source files, with upstream's native Rust extraction
-kernel enabled.
+The **2026-11-01 retest of merged main** measured a **4.95× geometric-mean full-index
+speedup** over upstream CodeGraph across four fixed repositories, with **85.9%–90.0% lower
+peak indexing RSS**. Both sides indexed identical files and source bytes; upstream's native Rust
+extraction kernel was loaded and enabled for the measured languages.
+
+**Graph agreement remains below the design's acceptance thresholds**, as reported in the oracle section below.
 
 | Repository | Files | Upstream full index | `cgr` full index | Speedup | Peak RSS: upstream → `cgr` |
 |---|---:|---:|---:|---:|---:|
-| Express | 142 | 560 ms | 106 ms | **5.30×** | 278 → 35 MiB |
-| Gin | 99 | 652 ms | 112 ms | **5.81×** | 284 → 39 MiB |
-| Tokio | 814 | 2,409 ms | 321 ms | **7.51×** | 899 → 80 MiB |
-| Django | 2,984 | 10,184 ms | 1,404 ms | **7.25×** | 1,999 → 260 MiB |
+| Express | 142 | 532.7 ms | 121.9 ms | **4.37×** | 225.7 → 27.9 MiB |
+| Gin | 99 | 636.6 ms | 129.6 ms | **4.91×** | 246.3 → 34.8 MiB |
+| Tokio | 814 | 2,599.3 ms | 504.6 ms | **5.15×** | 736.1 → 73.4 MiB |
+| Django | 2,984 | 10,878.0 ms | 2,002.1 ms | **5.43×** | 1,909.2 → 229.6 MiB |
 
-Warm `explore` P50 latency improved by **3.72×–9.21×**; new-process `explore` CLI calls by
-**12.48×–17.42×**. Sync after a single-file comment edit improved by **7.54×–8.37×**, and
-single-file symbol renames by **2.99×–9.58×**.
+Measured revisions: `cgr` **`b827b1d`**, upstream **`d2e0389`** (package 1.6.2).
+Apple M5, 10 cores, 16 GiB RAM, macOS 26.5.2, AC power, Rust 1.94.1 release and Node 24.18.0.
+This is the **restricted tier**: two parse/resolve workers per implementation and `CGR_MEMORY_MB=2048`.
+Full-index medians use three complete CLI rebuilds after one warmup, with at least 30 seconds
+between commands and warm OS file caches. Workers were configured, not pinned to two physical cores.
+The unmodified benchmark wrapper enforced memory, disk, swap and process-tree RSS guards.
 
-Measured on an Apple M5 (10 cores, 16 GiB RAM), macOS 26.5.2, on AC power, using release builds
-and four parse/resolve workers per implementation. Full-index numbers are medians of three
-timed CLI runs after warmup, with warm OS file caches; speedup is upstream time divided by
-`cgr` time. Tested revisions: `cgr` **`fcc59af`**, upstream **`087de4c`** (Node 24.18.0).
+### Upstream oracle agreement
 
-Route coverage and query output lengths differ between the implementations, including missing
-Express/Gin route nodes in `cgr` for these samples. These differences affect the work performed
-and must be considered alongside the timings. See [benchmark methodology and coverage](docs/BENCHMARKS.md)
-for exact revisions, query and sync results, and validation details.
+Speed and graph agreement are measured separately. The primary oracle uses the design's exact
+`(source stable ID, target stable ID, kind, line, col)` edge key. NULL positions remain NULL;
+routes, containment edges and syntax-error files are retained. Precision = intersection / `cgr`
+edges, recall = intersection / oracle edges, Jaccard = intersection / union.
 
-### Query latency in the same local comparison
+| Repository | Matching edges | Unique edges: `cgr` / oracle | Precision | Recall | Jaccard |
+|---|---:|---:|---:|---:|---:|
+| Express | 1,384 | 2,527 / 2,334 | 54.77% | 59.30% | 39.80% |
+| Gin | 7,626 | 7,921 / 8,073 | 96.28% | 94.46% | 91.13% |
+| Tokio | 31,541 | 36,511 / 39,682 | 86.39% | 79.48% | 70.64% |
+| Django | 173,752 | 185,506 / 194,105 | 93.66% | 89.51% | 84.40% |
 
-| Repository | Warm `explore` P50: upstream → `cgr` | Warm speedup | New-process CLI speedup |
+**The design gate is not met** in Express, Gin, Tokio, Django. The required relative precision is **≥97%** and recall **≥95%**.
+Non-route node identity agreement does not establish resolved-edge parity. The detailed report
+also separates non-containment edges, edge kinds, languages, route coverage, ID representation
+and location differences. Secondary normalized/topology scores are diagnostic and do not replace
+this strict gate. These measurements therefore do not establish interchangeable graphs or equal
+answer quality. See [methodology, differences and samples](docs/BENCHMARKS.md) and the
+[machine-readable evidence](docs/benchmarks/2026-11-01-main-retest.json).
+
+### Incremental CLI synchronization
+
+CLI medians below are upstream → `cgr` (speedup), with three timed commands per category and
+implementation. Both sides receive the same edit; original source is restored after each category.
+Symbol renames are within one file and do not measure repository-wide refactoring.
+
+| Repository | No changes | Comment edit | Single-file symbol rename |
 |---|---:|---:|---:|
-| Express | 3.79 → 1.02 ms | 3.72× | 12.48× |
-| Gin | 8.82 → 0.96 ms | 9.21× | 15.70× |
-| Tokio | 15.93 → 3.28 ms | 4.86× | 15.60× |
-| Django | 32.28 → 4.60 ms | 7.02× | 17.42× |
+| Express | 183.2 → 37.6 ms (4.87×) | 311.8 → 56.7 ms (5.50×) | 312.5 → 53.0 ms (5.89×) |
+| Gin | 165.6 → 32.1 ms (5.16×) | 317.3 → 54.7 ms (5.80×) | 327.5 → 157.4 ms (2.08×) |
+| Tokio | 196.8 → 50.4 ms (3.90×) | 492.8 → 70.4 ms (7.00×) | 499.4 → 71.4 ms (7.00×) |
+| Django | 451.7 → 235.5 ms (1.92×) | 1925.9 → 270.2 ms (7.13×) | 1951.0 → 279.5 ms (6.98×) |
 
-Warm measurements cover the in-process explore handler, excluding MCP transport and queueing.
-New-process CLI measurements include startup. The warm-query P50 speedup geometric mean is
-**5.85×**. These measurements cover repository analysis and retrieval; no LLM task-completion
-or token-savings benchmark was run.
+
+### Query latency
+
+| Repository | Warm P50: upstream → `cgr` | P50 speedup | Warm P95: upstream → `cgr` | New-process CLI median |
+|---|---:|---:|---:|---:|
+| Express | 3.74 → 1.15 ms | 3.25× | 9.76 → 2.81 ms | 132.2 → 21.5 ms (6.14×) |
+| Gin | 8.47 → 0.95 ms | 8.92× | 11.73 → 3.08 ms | 140.3 → 20.5 ms (6.84×) |
+| Tokio | 16.49 → 3.27 ms | 5.03× | 21.78 → 5.99 ms | 162.6 → 17.9 ms (9.06×) |
+| Django | 33.25 → 4.50 ms | 7.39× | 51.87 → 11.30 ms | 301.0 → 14.8 ms (20.30×) |
+
+Warm measurements use the same 20 fixed queries × 3 passes after warming eight queries, calling
+production in-process handlers. They exclude MCP transport and queueing; CLI medians include
+startup for one fixed query repeated three times. Warm P50 speedup geometric mean: **5.73×**.
+Returned content and output lengths differ. No LLM or token-savings benchmark was run.
 
 ### Performance engineering update
 
-The next engine update adds event-path synchronization, source-free snapshot compaction after
-a quiet period, extraction-buffer spill to temporary mappings, preallocated resolution outcomes,
-fused hook scanning, selective/parallel event synthesis, compressed BM25 postings and adaptive
-radix edge sorting. Query source windows use one bounded text buffer with lazy line offsets.
-MCP now has bounded admission, cooperative cancellation and bounded project/watcher resources;
-prompt-hook discovery and the smoke helper's stdin/timer handling have been fixed.
+Main includes event-path sync, source-free snapshot compaction after a quiet period, extraction
+buffer spill, preallocated resolution outcomes, fused hook scanning, selective/parallel event
+synthesis, compressed BM25 postings, adaptive radix sorting and bounded source windows. MCP has
+bounded admission, cooperative cancellation and project/watcher cleanup.
 
-These changes use **snapshot format 2**. Run `cgr index /path/to/project` to rebuild an old index.
-The historical speedups above still refer to `fcc59af`. A new guarded benchmark was refused
-because available memory and swap did not meet the design's prerequisites, so this update has
-no additional measured speedup claim. See the bilingual
-[implementation and validation record](docs/PERFORMANCE-IMPLEMENTATION.md) for exact changes,
-resource readings and remaining work.
+These changes use **snapshot format 2**; run `cgr index /path/to/project` to rebuild an old index.
+The retest above measures the merged implementation. The earlier **6.40×** result used different
+worker settings and an older upstream revision; it is [archived separately](docs/BENCHMARKS-HISTORICAL.md),
+and is not a before/after estimate for this optimization. Implementation boundaries are recorded
+in the bilingual [engineering record](docs/PERFORMANCE-IMPLEMENTATION.md).
 
 ## Installation
 
@@ -483,9 +511,11 @@ other applications before a run.
 The performance implementation update passed **137 tests, with one ignored**, on macOS,
 plus release compilation, Clippy, formatting and the CLI/MCP/hook smoke test. All four real
 projects passed full/edit/restore graph equivalence and matched the prior engine's graph dumps.
-The historical benchmark revision passed 116 tests. Current verification details and the benchmark preflight refusal are in
-[the implementation record](docs/PERFORMANCE-IMPLEMENTATION.md). Linux/Windows runtime checks
-and hosted CI results are separate from this local validation.
+The historical benchmark revision passed 116 tests. Implementation checks are recorded in
+[the engineering record](docs/PERFORMANCE-IMPLEMENTATION.md). The subsequent main retest added
+128 timed commands, independent SQL verification of the upstream edge intersections, and
+successful checksum/incremental-full checks in all four repositories; see [the report](docs/BENCHMARKS.md).
+Local measurements and hosted CI results are separate evidence.
 
 Code revision `f82506e` passed all nine [hosted CI checks](https://github.com/NianJiuZst/CodeGrap-Rust/actions/runs/41286327676),
 including Linux/macOS/Windows tests and end-to-end smoke, lint, kernel reproducibility and the
@@ -511,8 +541,9 @@ formatting checks.
   resolution/synthesis; background compaction with delta rebasing remains M6 work.
 - **Execution deadlines:** query/hook cancellation is cooperative; a blocking filesystem call
   cannot be forcibly interrupted by the worker deadline.
-- **New performance targets:** the latest optimizations have correctness coverage; their
-  throughput, P95/P99 latency and large-repository RSS still need a new guarded measurement.
+- **Performance scope:** current timings cover four restricted-tier repositories. Standard-tier
+  workloads, concurrent-reader latency, large-repository RSS and agent-task outcomes remain
+  outside this measurement.
 
 ## Contributing
 
