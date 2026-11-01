@@ -67,12 +67,15 @@ own prior engine; it does not establish upstream oracle parity. A separate 64-fi
 verified automatic watcher delta publication, MCP refresh to the added function, full-build
 equivalence and exit within a two-second functional deadline after stdin closed. An actual
 format-1 index was rejected by the new reader and rebuilt into a verified format-2 index.
-These are correctness checks, not performance samples. Linux/Windows runtime behavior and
-hosted CI results are separate from these macOS checks.
+These are correctness checks, not performance samples. Code revision `f82506e` also passed
+all nine [hosted CI jobs](https://github.com/NianJiuZst/CodeGrap-Rust/actions/runs/41286327676):
+Linux/macOS/Windows unit/integration tests and end-to-end smoke, lint, kernel reproducibility
+and a static musl build. Windows passed 137 tests with one ignored. Local/hosted checks use
+Rust 1.99; the retained before/after release binaries use the same local Rust 1.94.1 toolchain.
 
 The guarded performance run was **refused before starting**. The initial preflight reported
 4,233 MiB available memory, 1,559 MiB swap and 40,800 MiB free disk. A repeat after the final
-release build reported 5,889 MiB available memory, 977 MiB swap and 39,027 MiB free disk;
+release build at that stage reported 5,889 MiB available memory, 977 MiB swap and 39,027 MiB free disk;
 available memory still fell below the required 6,144 MiB (swap must be below 1,024 MiB and free
 disk at least 20,480 MiB).
 Protection thresholds were not relaxed. No new speedup percentage, latency target or large-repo
@@ -157,8 +160,13 @@ Express（142 文件）、Gin（99）、Tokio（814）、Django（2,984）的独
 2 秒功能期限内退出。真实的旧格式索引已验证会被新读者拒绝，并能通过 `index` 重建为校验通过的格式 2。
 这些是正确性检查，不作为性能样本；macOS 结果也不等于 Linux/Windows 运行验证或远程 CI 已通过。
 
+代码版本 `f82506e` 的[最终远程 CI](https://github.com/NianJiuZst/CodeGrap-Rust/actions/runs/41286327676)
+已全部通过，共 9 个任务：Linux/macOS/Windows 单元/集成测试与端到端 smoke、格式和 Clippy、
+内核来源复现及静态 musl 构建。Windows 同样为 137 通过、1 忽略。最终本机/远程检查使用 Rust 1.99；
+保留的新旧 release 二进制均使用本机 Rust 1.94.1 构建。
+
 正式性能复测在启动前被保护脚本拒绝。首次读数为可用内存 **4,233 MiB**、Swap **1,559 MiB**、
-空闲磁盘 **40,800 MiB**；最终 release 编译后重试，读数为 **5,889 MiB / 977 MiB / 39,027 MiB**。
+空闲磁盘 **40,800 MiB**；当阶段 release 编译后重试，读数为 **5,889 MiB / 977 MiB / 39,027 MiB**。
 重试仍未达到可用内存至少 **6,144 MiB** 的要求；Swap 必须低于 **1,024 MiB**，空闲磁盘至少 **20,480 MiB**。
 保护阈值保持原值。因此本轮没有新增可发布的加速百分比、延迟达标结论或大仓库 RSS 保证；历史
 **6.40×** 仍只属于原被测版本。资源条件满足后，按上方命令在独立目录逐一测旧、新二进制，保留相同的

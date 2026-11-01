@@ -487,6 +487,10 @@ The historical benchmark revision passed 116 tests. Current verification details
 [the implementation record](docs/PERFORMANCE-IMPLEMENTATION.md). Linux/Windows runtime checks
 and hosted CI results are separate from this local validation.
 
+Code revision `f82506e` passed all nine [hosted CI checks](https://github.com/NianJiuZst/CodeGrap-Rust/actions/runs/41286327676),
+including Linux/macOS/Windows tests and end-to-end smoke, lint, kernel reproducibility and the
+static Linux build. Hosted correctness results are not used as performance measurements.
+
 The CI configuration includes formatting, Clippy, kernel reproducibility, multi-platform tests
 and release-build checks. The smoke helper covers the CLI, MCP handshake and prompt hook.
 To refresh the kernel, use `scripts/sync-kernel.sh <upstream-checkout> <commit>` and verify the

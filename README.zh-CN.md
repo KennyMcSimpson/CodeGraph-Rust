@@ -434,6 +434,10 @@ scripts/bench-local.sh --help
 当前验证细节及性能复测的前置检查结果见[优化记录](docs/PERFORMANCE-IMPLEMENTATION.md)；
 Linux/Windows 运行情况与远程 CI 应单独确认。
 
+代码版本 `f82506e` 已通过全部 9 项[远程 CI 检查](https://github.com/NianJiuZst/CodeGrap-Rust/actions/runs/41286327676)：
+Linux/macOS/Windows 测试与端到端 smoke、格式和 Clippy、内核来源复现、静态 Linux 构建。
+远程正确性检查不作为性能测量结果。
+
 CI 配置包含格式检查、Clippy、内核可重复同步、多平台测试与发布构建检查。
 Smoke 脚本覆盖 CLI、MCP 握手与提示钩子。更新内核时使用
 `scripts/sync-kernel.sh <upstream-checkout> <commit>`，并验证补丁和提取测试；vendoring 代码保留上游格式，
