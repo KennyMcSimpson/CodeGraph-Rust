@@ -101,6 +101,12 @@ pub enum BindKind {
     Field = 3,
     /// The file's declared package (Go `package x`, Java/Kotlin `package a.b`); `name` is the package.
     Package = 4,
+    /// Function assigned to a JavaScript object member, rather than a free function.
+    /// This is declaration metadata and must not participate in lexical lookup.
+    MemberFn = 5,
+    /// Raw Rust return annotation, keyed by the function's node. This metadata
+    /// preserves generic return types the upstream kernel intentionally reduces.
+    ReturnType = 6,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,9 +114,10 @@ pub struct BindingFact {
     pub scope: u32,
     pub name: String,
     pub kind: BindKind,
-    /// Declared type as written (`Foo`, `Foo<T>` reduced to `Foo` by the extractor), or empty.
+    /// Declared type, usually reduced to its head (`Foo<T>` -> `Foo`). Rust Result/Option
+    /// retain their arguments so the resolver does not mistake the container for its value.
     pub decl_type: String,
-    /// Constructor name when initialised by `new Foo()` / `Foo()` / `Foo{}`, or empty.
+    /// Constructor or bounded initializer call path (`Foo::new().build()`), or empty.
     pub init_ctor: String,
     /// 1-based declaration line; the binding is visible from here on (hoisted functions
     /// are visible throughout their scope and use line 0).

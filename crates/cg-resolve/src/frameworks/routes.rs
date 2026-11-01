@@ -431,6 +431,15 @@ pub fn scan_next(rel: &str, src: &str) -> Vec<Route> {
 }
 
 pub fn scan(fw: Framework, lang: Lang, rel: &str, src: &str) -> Vec<Route> {
+    // Framework repositories contain route examples in API comments. Those
+    // snippets are documentation, not registrations in the program's graph.
+    let code;
+    let src = if matches!(fw, Framework::Express | Framework::Gin) {
+        code = cg_extract::post::strip_js_comments(src);
+        code.as_str()
+    } else {
+        src
+    };
     match fw {
         Framework::Express => scan_express(src),
         Framework::Flask | Framework::FastApi => scan_python_decorators(src),

@@ -100,6 +100,29 @@ pub enum TypeRes {
     Unknown,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StdWrapper {
+    Result,
+    Option,
+}
+
+/// A known project type, possibly still inside a standard Rust container.
+/// Keep the container until an operation such as `unwrap` actually removes it.
+struct ValueType {
+    node: NodeIdx,
+    wrappers: SmallVec<[StdWrapper; 2]>,
+}
+
+impl ValueType {
+    fn plain(node: NodeIdx) -> Self {
+        Self { node, wrappers: SmallVec::new() }
+    }
+
+    fn receiver(self) -> Option<NodeIdx> {
+        self.wrappers.is_empty().then_some(self.node)
+    }
+}
+
 /// Per-file lookup structures, built once per file and reused for all its references.
 pub struct FileCx<'e, 'v> {
     pub e: &'e Engine<'v>,
@@ -310,7 +333,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
                 if let Some(list) = self.bindings.get(&(s, name)) {
                     let mut best = None;
                     for b in list {
-                        if b.kind == BindKind::Package as u8 {
+                        if b.kind == BindKind::Package as u8 || b.kind == BindKind::MemberFn as u8 || b.kind == BindKind::ReturnType as u8 {
                             continue;
                         }
                         if b.line == 0 || b.line <= line {
@@ -403,7 +426,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
             cur = match cur {
                 Bound::Module(m) => match self.e.lookup_export(m, seg, 0) {
                     Some(b) => b,
-                    None => match self.e.lookup_top_level(m, seg) {
+                    None => match (self.view.file(m).lang().family() != LangFamily::Js).then(|| self.e.lookup_top_level(m, seg)).flatten() {
                         Some(n) => Bound::Node(n),
                         None => Bound::Module(self.e.submodule(m, seg)?),
                     },
@@ -438,6 +461,13 @@ impl<'e, 'v> FileCx<'e, 'v> {
     }
 
     fn qualified_type(&self, wcx: &mut WorkerCx<'e, 'v>, head: &str, rest: &str, full: &str) -> TypeRes {
+        if self.family == LangFamily::Rust {
+            if let Some(Bound::Node(n)) = self.rust_path_bound(full) {
+                if kind_of(self.view, n).is_type() {
+                    return TypeRes::Node(n);
+                }
+            }
+        }
         let segs: Vec<&str> = rest.split(['.', ':']).filter(|s| !s.is_empty()).collect();
         match self.resolve_name(wcx, head, Accept::Any, 0, u32::MAX, None, false) {
             NameRes::Module(tf) => match self.walk_path(Bound::Module(tf), &segs) {
@@ -478,67 +508,196 @@ impl<'e, 'v> FileCx<'e, 'v> {
         TypeRes::Node(n)
     }
 
+    fn rust_path_bound(&self, name: &str) -> Option<Bound> {
+        // A module and a value can share a Rust name (`mod once; pub use
+        // once::once`). Resolve the parent, then consult its exports before
+        // treating the final segment as a module filename.
+        let (prefix, last) = name.rsplit_once("::").unwrap_or((name, ""));
+        let (target, tail) = self.e.modules.resolve_rust_path(prefix, self.file);
+        let ImportTarget::File(file) = target else { return None };
+        let mut segs: Vec<_> = prefix.split("::").filter(|s| !s.is_empty()).collect();
+        let start = segs.len().checked_sub(tail)?;
+        if !last.is_empty() {
+            segs.push(last);
+        }
+        self.walk_path(Bound::Module(file), &segs[start..])
+    }
+
     /// The type a binding holds, from its declared type or initialiser.
     pub fn binding_type(&self, wcx: &mut WorkerCx<'e, 'v>, b: &BindingRec) -> Option<NodeIdx> {
+        self.binding_value(wcx, b, 0)?.receiver()
+    }
+
+    fn binding_value(&self, wcx: &mut WorkerCx<'e, 'v>, b: &BindingRec, depth: u8) -> Option<ValueType> {
+        if depth >= 16 {
+            return None;
+        }
         let dt = self.view.text_str(b.decl_type);
         if !dt.is_empty() {
-            return match self.lookup_type(wcx, dt) {
-                TypeRes::Node(n) => Some(n),
-                _ => None,
-            };
+            return self.type_value(wcx, dt, None, depth + 1);
         }
         let init = self.view.text_str(b.init_ctor);
         if init.is_empty() || init == "embedded" {
             return None;
         }
-        if let Some(call) = init.strip_suffix("()") {
-            return self.call_result_type(wcx, call);
+        let scope = b.scope.0.wrapping_sub(self.scope_base);
+        // The new variable is not in scope in its own initializer (`let rt = rt()`).
+        let shadows = init.split(['.', ':', '(']).next() == Some(self.view.text_str(b.name));
+        let line = if shadows { b.line.saturating_sub(1) } else { b.line };
+        self.expression_value(wcx, init, scope, line, depth + 1)
+    }
+
+    fn expression_value(&self, wcx: &mut WorkerCx<'e, 'v>, init: &str, scope: u32, line: u32, depth: u8) -> Option<ValueType> {
+        if depth >= 16 {
+            return None;
         }
-        match self.lookup_type(wcx, init) {
-            TypeRes::Node(n) => Some(n),
+        if let Some(inner) = init.strip_suffix('?') {
+            let mut value = self.expression_value(wcx, inner, scope, line, depth + 1)?;
+            value.wrappers.pop()?;
+            return Some(value);
+        }
+        if let Some(call) = init.strip_suffix("()") {
+            return self.call_value(wcx, call, scope, line, depth + 1);
+        }
+        if self.family == LangFamily::Rust {
+            if let Some(other) = self.lookup_binding(init, scope, line, false) {
+                return self.binding_value(wcx, other, depth + 1);
+            }
+        }
+        self.type_value(wcx, init, None, depth + 1)
+    }
+
+    fn std_wrapper(&self, wcx: &mut WorkerCx<'e, 'v>, name: &str) -> Option<StdWrapper> {
+        let (prefix, leaf) = name.rsplit_once("::").unwrap_or(("", name));
+        let wrapper = match leaf {
+            "Result" => StdWrapper::Result,
+            "Option" => StdWrapper::Option,
+            _ => return None,
+        };
+        let standard = match prefix {
+            "std::result" | "core::result" | "std::io" => wrapper == StdWrapper::Result,
+            "std::option" | "core::option" => wrapper == StdWrapper::Option,
+            "" => matches!(self.lookup_type(wcx, name), TypeRes::Builtin),
+            "io" if wrapper == StdWrapper::Result => self.visible_import("io", 0).is_some_and(|i| {
+                let imp = &self.imports[i as usize];
+                self.view.text_str(imp.spec) == "std" && self.view.text_str(imp.imported) == "io"
+            }),
+            _ => false,
+        };
+        standard.then_some(wrapper)
+    }
+
+    fn type_value(&self, wcx: &mut WorkerCx<'e, 'v>, name: &str, receiver: Option<NodeIdx>, depth: u8) -> Option<ValueType> {
+        if depth >= 16 || name.len() > 4096 {
+            return None;
+        }
+        let name = name.trim();
+        let name = name.strip_prefix("&mut ").or_else(|| name.strip_prefix('&')).unwrap_or(name).trim();
+        if matches!(name, "Self" | "self" | "this") {
+            return receiver.map(ValueType::plain);
+        }
+        if self.family == LangFamily::Rust {
+            if let Some(open) = name.find('<') {
+                let base = name[..open].trim();
+                let Some(wrapper) = self.std_wrapper(wcx, base) else {
+                    return match self.lookup_type(wcx, base) {
+                        TypeRes::Node(t) => Some(ValueType::plain(t)),
+                        _ => None,
+                    };
+                };
+                let args = name[open + 1..].strip_suffix('>')?;
+                let mut nesting = 0u32;
+                let mut end = args.len();
+                for (i, c) in args.char_indices() {
+                    match c {
+                        '<' | '(' | '[' => nesting += 1,
+                        '>' | ')' | ']' => nesting = nesting.checked_sub(1)?,
+                        ',' if nesting == 0 => {
+                            end = i;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                let mut inner = self.type_value(wcx, &args[..end], receiver, depth + 1)?;
+                inner.wrappers.push(wrapper);
+                return Some(inner);
+            }
+        }
+        match self.lookup_type(wcx, name) {
+            TypeRes::Node(t) => Some(ValueType::plain(t)),
             _ => None,
         }
     }
 
-    /// Type produced by calling `callee` (a constructor, or a function with a return type).
-    fn call_result_type(&self, wcx: &mut WorkerCx<'e, 'v>, callee: &str) -> Option<NodeIdx> {
-        // `Type::new` / `Type.create`: assume factory methods of a type produce that type
-        if let Some((head, rest)) = split_head(callee) {
-            if let TypeRes::Node(t) = self.lookup_type(wcx, head) {
-                if self.view.node(t).kind().is_type() {
-                    if let Some(m) = self.e.find_member(t, rest.rsplit(['.', ':']).next().unwrap_or(rest)) {
-                        if let Some(rt) = self.view.node(m).return_type() {
-                            let rt_name = rt.trim();
-                            if rt_name != "Self" && rt_name != "self" {
-                                let owner = self.e.modules.view.hot(m).file;
-                                let cx = wcx.file_cx(self.e, owner);
-                                if let TypeRes::Node(n) = cx.lookup_type(wcx, rt_name) {
-                                    return Some(n);
-                                }
-                            }
+    fn returned_value(&self, wcx: &mut WorkerCx<'e, 'v>, n: NodeIdx, receiver: Option<NodeIdx>, depth: u8) -> Option<ValueType> {
+        let node = self.view.node(n);
+        if node.kind().is_type() {
+            return Some(ValueType::plain(n));
+        }
+        let cx = wcx.file_cx(self.e, node.file());
+        let rt = self.e.return_types.get(&n).copied().or_else(|| node.return_type())?;
+        cx.type_value(wcx, rt, receiver, depth + 1)
+    }
+
+    /// Follow declared return types through a bounded chain. Static methods do
+    /// not implicitly return their owner, and Result<T> is not treated as T.
+    fn call_value(&self, wcx: &mut WorkerCx<'e, 'v>, callee: &str, scope: u32, line: u32, depth: u8) -> Option<ValueType> {
+        if depth >= 16 || callee.len() > 4096 {
+            return None;
+        }
+        if let Some((inner, method)) = callee.rsplit_once("().") {
+            let receiver = self.call_value(wcx, inner, scope, line, depth + 1)?;
+            return self.member_return(wcx, receiver, method, depth + 1);
+        }
+        if let Some((inner, method)) = callee.rsplit_once('.') {
+            if inner.ends_with('?') {
+                let receiver = self.expression_value(wcx, inner, scope, line, depth + 1)?;
+                return self.member_return(wcx, receiver, method, depth + 1);
+            }
+        }
+        let split = callee.rsplit_once("::").or_else(|| callee.rsplit_once('.'));
+        if let Some((owner, method)) = split {
+            // Django's default manager returns the concrete model for these
+            // operations. Require the actual Model base in the resolved
+            // hierarchy; a coincidentally named `.objects.create` is insufficient.
+            if self.family == LangFamily::Python && matches!(method, "create" | "get" | "first" | "last" | "earliest" | "latest") {
+                if let (Some(base), Some(model)) = (self.e.django_model, owner.strip_suffix(".objects")) {
+                    if let TypeRes::Node(t) = self.lookup_type(wcx, model) {
+                        if t == base || self.e.ancestors(t).contains(&base) {
+                            return Some(ValueType::plain(t));
                         }
                     }
-                    return Some(t);
                 }
+            }
+            let receiver = if let Some(b) = self.lookup_binding(owner, scope, line, false) {
+                self.binding_value(wcx, b, depth + 1)
+            } else {
+                self.type_value(wcx, owner, None, depth + 1)
+            };
+            if let Some(t) = receiver {
+                return self.member_return(wcx, t, method, depth + 1);
             }
         }
-        let scope = 0;
-        match self.resolve_name(wcx, callee, Accept::Callable, scope, u32::MAX, None, true) {
-            NameRes::Found(n, ..) => {
-                let node = self.view.node(n);
-                if node.kind().is_type() {
-                    return Some(n);
-                }
-                let rt = node.return_type()?;
-                let owner = self.view.hot(n).file;
-                let cx = wcx.file_cx(self.e, owner);
-                match cx.lookup_type(wcx, rt) {
-                    TypeRes::Node(t) => Some(t),
-                    _ => None,
-                }
-            }
+        match self.resolve_name(wcx, callee, Accept::Callable, scope, line, None, true) {
+            NameRes::Found(n, ..) => self.returned_value(wcx, n, self.enclosing_type(n), depth + 1),
             _ => None,
         }
+    }
+
+    fn member_return(&self, wcx: &mut WorkerCx<'e, 'v>, mut receiver: ValueType, method: &str, depth: u8) -> Option<ValueType> {
+        if !receiver.wrappers.is_empty() {
+            return match method {
+                "unwrap" | "expect" | "unwrap_or" | "unwrap_or_else" | "unwrap_or_default" => {
+                    receiver.wrappers.pop();
+                    Some(receiver)
+                }
+                "as_ref" | "as_mut" => Some(receiver),
+                _ => None,
+            };
+        }
+        let m = self.e.find_member(receiver.node, method)?;
+        self.returned_value(wcx, m, Some(receiver.node), depth + 1)
     }
 
     /// Declared type of field `name` of type `t` (through the hierarchy).
@@ -742,9 +901,23 @@ impl<'e, 'v> FileCx<'e, 'v> {
                     // imported value used as a namespace (rare)
                     return NameRes::Found(n, by::IMPORT, 80);
                 }
-                Bound::Module(m) => return NameRes::Module(m),
+                Bound::Module(m) => {
+                    // `require('./factory')()` invokes module.exports. Keep the
+                    // module namespace for member calls; never substitute its
+                    // default function for a missing property such as .static.
+                    let imp = &self.imports[i as usize];
+                    if self.family == LangFamily::Js && imp.kind == ImportKind::Require as u8 {
+                        if let Some(Bound::Node(n)) = e.lookup_export(m, "default", 0) {
+                            if accept.ok(kind_of(view, n)) {
+                                return NameRes::Found(n, by::IMPORT, 95);
+                            }
+                        }
+                    }
+                    return NameRes::Module(m);
+                }
                 Bound::Pkg(p) => return NameRes::Pkg(p),
                 Bound::External => return NameRes::External,
+                Bound::Unknown if self.family == LangFamily::Js => return NameRes::NotFound,
                 Bound::Unknown => {}
             }
         }
@@ -845,9 +1018,16 @@ impl<'e, 'v> FileCx<'e, 'v> {
             return Outcome::st(status::NO_CANDIDATE);
         }
         let mut found: SmallVec<[NodeIdx; 2]> = SmallVec::new();
-        for cand in self.view.by_name(method) {
+        let assigned = self.e.member_functions.get(method).map(|v| v.as_slice()).unwrap_or_default();
+        for cand in self.view.by_name(method).chain(assigned.iter().copied()) {
+            if found.contains(&cand) {
+                continue;
+            }
             let node = self.view.node(cand);
             if !matches!(node.kind(), NodeKind::Method | NodeKind::Function | NodeKind::Property | NodeKind::Field) {
+                continue;
+            }
+            if node.kind() == NodeKind::Function && !assigned.contains(&cand) {
                 continue;
             }
             if self.view.file(node.file()).lang().family() != self.family || !self.visible(cand, method) {
@@ -923,16 +1103,20 @@ impl<'e, 'v> FileCx<'e, 'v> {
         // (a) a local variable, parameter or field
         if let Some(b) = self.lookup_binding(root, scope, r.line, false) {
             if b.kind != BindKind::LocalFn as u8 {
-                return match self.binding_type(wcx, b) {
-                    Some(t) => {
-                        let o = self.member_of(wcx, t, path, method, 90);
+                return match self.binding_value(wcx, b, 0) {
+                    Some(t) if t.wrappers.is_empty() => {
+                        let o = self.member_of(wcx, t.node, path, method, 90);
                         if o.status == status::RESOLVED {
                             o
                         } else {
                             Outcome::st(status::NO_CANDIDATE)
                         }
                     }
+                    Some(_) => Outcome::st(status::NO_CANDIDATE),
                     None => {
+                        if !self.view.text_str(b.decl_type).is_empty() {
+                            return Outcome::st(status::NO_CANDIDATE);
+                        }
                         let o = self.fallback_method(method);
                         if o.status == status::RESOLVED && path.is_empty() {
                             o
@@ -983,11 +1167,22 @@ impl<'e, 'v> FileCx<'e, 'v> {
                     return Outcome::st(status::NO_CANDIDATE);
                 }
                 Bound::External => return Outcome::st(status::EXTERNAL),
+                Bound::Unknown if self.family == LangFamily::Js => return Outcome::st(status::NO_CANDIDATE),
                 Bound::Unknown => {}
             }
         }
         // (c) a type (static member) or, in Rust, a child module
         if self.family == LangFamily::Rust {
+            let mut qualified = root.to_owned();
+            for seg in path.iter().copied().chain(std::iter::once(method)) {
+                qualified.push_str("::");
+                qualified.push_str(seg);
+            }
+            if let Some(Bound::Node(n)) = self.rust_path_bound(&qualified) {
+                if Accept::Callable.ok(kind_of(view, n)) {
+                    return Outcome::found(n, by::IMPORT, 92);
+                }
+            }
             if let Some(mf) = self.e.submodule(self.file, root) {
                 return self.in_module(wcx, mf, path, method);
             }
@@ -1036,7 +1231,8 @@ impl<'e, 'v> FileCx<'e, 'v> {
                     }
                 }
             }
-            return self.fallback_method(method);
+            // A known receiver constrains member lookup to its own hierarchy.
+            return Outcome::st(status::NO_CANDIDATE);
         }
         Outcome::st(status::NO_CANDIDATE)
     }
@@ -1054,7 +1250,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
 
     fn call_result(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, inner: &str, method: &str) -> Outcome {
         // type produced by calling `inner`
-        let t = match self.call_result_type(wcx, inner) {
+        let t = match self.call_value(wcx, inner, self.scope_at(r.line, r.col), r.line, 0).and_then(ValueType::receiver) {
             Some(t) => t,
             None => {
                 // `inner` may be a method of a typed receiver: resolve it as a call first

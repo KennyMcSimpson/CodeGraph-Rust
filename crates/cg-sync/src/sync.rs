@@ -16,7 +16,7 @@ use crate::detect::{diff_view, Diff};
 use cg_core::budget::MemBudget;
 use cg_core::config::ProjectConfig;
 use cg_core::{brand, CgError, EdgeKind, FileId, NodeIdx, RefKind, Result, StrId, NONE};
-use cg_extract::{fileflags, try_extract_stream, ExtractConfig, FileBatch};
+use cg_extract::{fileflags, try_extract_stream, BindKind, ExtractConfig, FileBatch};
 use cg_resolve::driver::{make_edge, round_of, update_of, FNREF_META};
 use cg_resolve::{hooks_for, index_with_guard, resolve_refs, Engine, IndexOptions, Outcome, ProjectInfo, Round_};
 use cg_scan::{scan, ScanOptions};
@@ -255,6 +255,18 @@ fn defs_of(view: &View, f: FileId) -> BTreeMap<DefKey, Vec<DefDetail>> {
 }
 
 type ExportSig = Vec<(String, String, String, u8)>;
+
+type ResolverFactSig = BTreeSet<(u8, String, String, String)>;
+
+/// These facts change resolution even when the kernel's declaration identity
+/// stays the same (e.g. `obj.old = function internal` -> `obj.new = ...`).
+fn resolver_fact_sig(view: &View, f: FileId) -> ResolverFactSig {
+    view.bindings_of(f)
+        .iter()
+        .filter(|b| (b.kind == BindKind::MemberFn as u8 || b.kind == BindKind::ReturnType as u8) && b.node.is_some())
+        .map(|b| (b.kind, view.text_str(b.name).to_owned(), view.node(b.node).qname().to_owned(), view.text_str(b.decl_type).to_owned()))
+        .collect()
+}
 
 /// What a file declares as exports (re-exports, aliases, default exports, star exports). Exported
 /// definitions are covered by the definition diff and by dead-target handling.
@@ -511,6 +523,13 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
         let old = if states[i] == DeltaState::Replaced { defs_of(&base_view, *f) } else { BTreeMap::new() };
         let new = defs_of(&view1, *f);
         definitions_changed |= old != new;
+        let old_facts = if states[i] == DeltaState::Replaced { resolver_fact_sig(&base_view, *f) } else { BTreeSet::new() };
+        let new_facts = resolver_fact_sig(&view1, *f);
+        if old_facts != new_facts {
+            definitions_changed = true;
+            d_names.extend(old_facts.iter().chain(&new_facts).map(|fact| fact.1.clone()));
+            export_changed.push(*f);
+        }
         for (k, details) in &new {
             if (old.get(k) != Some(details)) && !old.contains_key(k) {
                 d_names.insert(k.name.clone());
@@ -529,6 +548,7 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
         }
     }
     for f in &removed {
+        d_names.extend(resolver_fact_sig(&base_view, *f).into_iter().map(|fact| fact.1));
         for k in defs_of(&base_view, *f).keys() {
             d_names.insert(k.name.clone());
         }

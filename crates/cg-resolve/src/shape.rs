@@ -63,7 +63,7 @@ pub fn parse_shape(name: &str) -> Shape<'_> {
         }
         return Shape::Bare(rest.trim());
     }
-    if let Some(i) = name.find("().") {
+    if let Some(i) = name.rfind("().") {
         let inner = name[..i].trim();
         let method = last_segment(&name[i + 3..]);
         return if inner == "super" { Shape::Super { method } } else { Shape::CallResult { inner, method } };

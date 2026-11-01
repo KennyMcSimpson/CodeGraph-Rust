@@ -178,22 +178,19 @@ impl ProjectInfo {
                 v.push(name);
             }
         };
-        add(self.packages.iter().any(|p| p.deps.contains("express")), "express");
-        add(self.packages.iter().any(|p| p.deps.contains("react") || p.deps.contains("react-dom")), "react");
-        add(self.packages.iter().any(|p| p.deps.contains("next")), "next");
+        let npm = |name: &str| self.packages.iter().any(|p| p.name.as_deref() == Some(name) || p.deps.contains(name));
+        add(npm("express"), "express");
+        add(npm("react") || npm("react-dom"), "react");
+        add(npm("next"), "next");
         add(self.py_deps.contains("fastapi"), "fastapi");
         add(self.py_deps.contains("flask"), "flask");
         add(self.py_deps.contains("django"), "django");
-        add(self.go_deps_contain("gin-gonic/gin"), "gin");
+        add(self.go_mod_deps.iter().any(|d| d == "github.com/gin-gonic/gin") || self.go_mods.iter().any(|m| m.module == "github.com/gin-gonic/gin"), "gin");
         add(self.jvm_deps_text.contains("spring-boot") || self.jvm_deps_text.contains("springframework"), "spring");
-        add(self.crates.iter().any(|c| c.deps.contains("axum")), "axum");
+        add(self.crates.iter().any(|c| c.name == "axum" || c.deps.contains("axum")), "axum");
         v.sort();
         v.dedup();
         v.into_iter().map(str::to_owned).collect()
-    }
-
-    fn go_deps_contain(&self, needle: &str) -> bool {
-        self.go_mod_deps.iter().any(|d| d.contains(needle))
     }
 }
 

@@ -21,6 +21,12 @@ fn walk(cx: &mut Cx, n: Node, scope: u32) {
             export_stmt(cx, n);
             walk_children(cx, n, scope);
         }
+        "assignment_expression" => {
+            if scope == 0 {
+                commonjs_export(cx, n);
+            }
+            walk_children(cx, n, scope);
+        }
         "function_declaration" | "generator_function_declaration" => {
             if scope != 0 {
                 if let Some(name) = n.child_by_field_name("name") {
@@ -280,7 +286,108 @@ fn export_stmt(cx: &mut Cx, n: Node) {
     }
 }
 
+fn commonjs_export(cx: &mut Cx, n: Node) {
+    let Some(left) = n.child_by_field_name("left") else { return };
+    let target = cx.text(left);
+    let root = target.split('.').next().unwrap_or(target);
+    if cx.lookup_binding(0, root).is_some() {
+        return; // A user variable named module/exports shadows CommonJS globals.
+    }
+    let name = if target == "module.exports" {
+        "default"
+    } else if let Some(name) = target.strip_prefix("module.exports.").or_else(|| target.strip_prefix("exports.")) {
+        if name.is_empty() || name.contains(['.', '[', ']']) {
+            return;
+        }
+        name
+    } else {
+        return;
+    };
+    let Some(value) = n.child_by_field_name("right") else { return };
+    commonjs_value(cx, name, value);
+}
+
+fn commonjs_value(cx: &mut Cx, name: &str, value: Node) {
+    if let Some(spec) = require_target(cx, value) {
+        let line = cx.line(value);
+        cx.add_import(ImportFact {
+            local: String::new(),
+            imported: "*".into(),
+            spec: spec.clone(),
+            kind: ImportKind::SideEffect,
+            type_only: false,
+            scope: 0,
+            line,
+        });
+        if name == "default" {
+            cx.facts.exports.push(ExportFact { name: "*".into(), node_row: NONE, from_spec: spec.clone(), from_name: "*".into(), star: true });
+        }
+        cx.facts.exports.push(ExportFact { name: name.to_owned(), node_row: NONE, from_spec: spec, from_name: "default".into(), star: false });
+        return;
+    }
+    let (node_row, from_spec, from_name) = match value.kind() {
+        "identifier" | "member_expression" => {
+            let text = cx.text(value);
+            let (root, member) = text.split_once('.').map_or((text, None), |(a, b)| (a, Some(b)));
+            if let Some(imp) = cx.facts.imports.iter().find(|i| i.scope == 0 && i.local == root) {
+                let imported = member.unwrap_or(if imp.imported == "*" { "default" } else { &imp.imported });
+                (NONE, imp.spec.clone(), imported.to_owned())
+            } else if member.is_none() {
+                (NONE, String::new(), text.to_owned())
+            } else {
+                return;
+            }
+        }
+        "function_expression" | "function" | "generator_function" | "arrow_function" | "class" => {
+            (cx.row_at(cx.start(value)).unwrap_or(NONE), String::new(), String::new())
+        }
+        "object" if name == "default" => {
+            for prop in kids(value) {
+                if prop.kind() == "pair" {
+                    if let (Some(key), Some(val)) = (prop.child_by_field_name("key"), prop.child_by_field_name("value")) {
+                        let key = unquote(cx.text(key)).to_owned();
+                        commonjs_value(cx, &key, val);
+                    }
+                } else if prop.kind() == "shorthand_property_identifier" {
+                    commonjs_value(cx, cx.text(prop), prop);
+                }
+            }
+            return;
+        }
+        "shorthand_property_identifier" => (NONE, String::new(), cx.text(value).to_owned()),
+        _ => return,
+    };
+    cx.facts.exports.push(ExportFact { name: name.to_owned(), node_row, from_spec, from_name, star: false });
+}
+
 fn function(cx: &mut Cx, n: Node, scope: u32) {
+    // The kernel labels `obj.method = function method() {}` as a Function. Keep
+    // evidence of the member assignment so an unknown receiver cannot match an
+    // unrelated, plain function with the same name.
+    if let Some(parent) = n.parent() {
+        let member = match parent.kind() {
+            "object" if n.kind() == "method_definition" => n.child_by_field_name("name"),
+            "assignment_expression" if parent.child_by_field_name("right") == Some(n) => parent
+                .child_by_field_name("left")
+                .filter(|left| matches!(left.kind(), "member_expression" | "subscript_expression"))
+                .and_then(|left| left.child_by_field_name("property").or_else(|| left.child_by_field_name("index").filter(|index| index.kind() == "string"))),
+            "pair" if parent.child_by_field_name("value") == Some(n) => parent.child_by_field_name("key"),
+            _ => None,
+        };
+        if let Some(member) = member {
+            if let Some(row) = cx.row_at(cx.start(n)) {
+                cx.facts.bindings.push(BindingFact {
+                    scope,
+                    name: cx.text(member).trim_matches(['\'', '"']).to_owned(),
+                    kind: BindKind::MemberFn,
+                    decl_type: String::new(),
+                    init_ctor: String::new(),
+                    line: cx.line(n),
+                    node_row: row,
+                });
+            }
+        }
+    }
     let sc = cx.push_scope(ScopeKind::Function, scope, n);
     let line = cx.line(n);
     if let Some(p) = n.child_by_field_name("parameter") {
