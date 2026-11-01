@@ -294,7 +294,7 @@ fn commonjs_export(cx: &mut Cx, n: Node) {
         return; // A user variable named module/exports shadows CommonJS globals.
     }
     let name = if target == "module.exports" {
-        "default"
+        COMMONJS_MODULE
     } else if let Some(name) = target.strip_prefix("module.exports.").or_else(|| target.strip_prefix("exports.")) {
         if name.is_empty() || name.contains(['.', '[', ']']) {
             return;
@@ -319,10 +319,11 @@ fn commonjs_value(cx: &mut Cx, name: &str, value: Node) {
             scope: 0,
             line,
         });
-        if name == "default" {
+        if name == COMMONJS_MODULE {
             cx.facts.exports.push(ExportFact { name: "*".into(), node_row: NONE, from_spec: spec.clone(), from_name: "*".into(), star: true });
+            cx.facts.exports.push(ExportFact { name: "default".into(), node_row: NONE, from_spec: spec.clone(), from_name: "default".into(), star: false });
         }
-        cx.facts.exports.push(ExportFact { name: name.to_owned(), node_row: NONE, from_spec: spec, from_name: "default".into(), star: false });
+        cx.facts.exports.push(ExportFact { name: name.to_owned(), node_row: NONE, from_spec: spec, from_name: COMMONJS_MODULE.into(), star: false });
         return;
     }
     let (node_row, from_spec, from_name) = match value.kind() {
@@ -330,7 +331,7 @@ fn commonjs_value(cx: &mut Cx, name: &str, value: Node) {
             let text = cx.text(value);
             let (root, member) = text.split_once('.').map_or((text, None), |(a, b)| (a, Some(b)));
             if let Some(imp) = cx.facts.imports.iter().find(|i| i.scope == 0 && i.local == root) {
-                let imported = member.unwrap_or(if imp.imported == "*" { "default" } else { &imp.imported });
+                let imported = member.unwrap_or(if imp.imported == "*" { COMMONJS_MODULE } else { &imp.imported });
                 (NONE, imp.spec.clone(), imported.to_owned())
             } else if member.is_none() {
                 (NONE, String::new(), text.to_owned())
@@ -341,7 +342,8 @@ fn commonjs_value(cx: &mut Cx, name: &str, value: Node) {
         "function_expression" | "function" | "generator_function" | "arrow_function" | "class" => {
             (cx.row_at(cx.start(value)).unwrap_or(NONE), String::new(), String::new())
         }
-        "object" if name == "default" => {
+        "object" if name == COMMONJS_MODULE => {
+            cx.facts.exports.push(ExportFact { name: name.to_owned(), node_row: NONE, from_spec: String::new(), from_name: "*".into(), star: false });
             for prop in kids(value) {
                 if prop.kind() == "pair" {
                     if let (Some(key), Some(val)) = (prop.child_by_field_name("key"), prop.child_by_field_name("value")) {

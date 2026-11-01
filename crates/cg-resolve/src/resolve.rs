@@ -8,6 +8,7 @@ use crate::engine::{Bound, Engine};
 use crate::modules::{ImportTarget, PkgId};
 use crate::shape::{parse_shape, split_head, Shape};
 use cg_core::{text::pack_pos, EdgeKind, FileId, Lang, LangFamily, NodeIdx, NodeKind, RefKind, Visibility, NONE};
+use cg_extract::facts::COMMONJS_MODULE;
 use cg_extract::{BindKind, ImportKind, ScopeKind};
 use cg_store::{status, BindingRec, ImportRec, RefRec, ScopeRec, View};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -907,7 +908,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
                     // default function for a missing property such as .static.
                     let imp = &self.imports[i as usize];
                     if self.family == LangFamily::Js && imp.kind == ImportKind::Require as u8 {
-                        if let Some(Bound::Node(n)) = e.lookup_export(m, "default", 0) {
+                        if let Some(Bound::Node(n)) = e.lookup_export(m, COMMONJS_MODULE, 0) {
                             if accept.ok(kind_of(view, n)) {
                                 return NameRes::Found(n, by::IMPORT, 95);
                             }

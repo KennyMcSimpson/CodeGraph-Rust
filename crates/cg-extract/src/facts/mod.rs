@@ -15,6 +15,10 @@ mod rust;
 mod util;
 pub use util::Cx;
 
+/// Internal export key for the module value itself, distinct from a named/ES
+/// `default` export. The leading NUL keeps it out of ordinary source identifiers.
+pub const COMMONJS_MODULE: &str = "\0cjs:module.exports";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum ImportKind {

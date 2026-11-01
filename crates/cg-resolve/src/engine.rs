@@ -5,6 +5,7 @@
 use crate::modules::{ImportTarget, Modules, PkgId};
 use crate::project::ProjectInfo;
 use cg_core::{EdgeKind, FileId, Lang, LangFamily, NodeIdx, NodeKind, StrId, NONE};
+use cg_extract::facts::COMMONJS_MODULE;
 use cg_extract::{BindKind, ImportKind};
 use cg_store::{outkind, status, View};
 use rayon::prelude::*;
@@ -171,6 +172,10 @@ impl<'v> Engine<'v> {
                 for ex in view.exports_of(f) {
                     let name = view.text_str(ex.name);
                     let spec = view.text_str(ex.from_spec);
+                    if name == COMMONJS_MODULE && spec.is_empty() && view.text_str(ex.from_name) == "*" {
+                        map.insert(name, ExportEntry::Module(f));
+                        continue;
+                    }
                     if ex.star != 0 {
                         if let Some(ImportTarget::File(tf)) = Some(self.modules.resolve_import(lang, spec, f)) {
                             stars.push(tf);
@@ -359,6 +364,11 @@ impl<'v> Engine<'v> {
             ImportTarget::Node(n) => Bound::Node(n),
             ImportTarget::Pkg(p) => Bound::Pkg(p),
             ImportTarget::File(tf) => {
+                if imp.kind == ImportKind::Default as u8 && imported == "default" {
+                    if let Some(value) = self.lookup_export(tf, COMMONJS_MODULE, 0) {
+                        return value;
+                    }
+                }
                 if imp.kind == ImportKind::Namespace as u8 || imported == "*" {
                     return Bound::Module(tf);
                 }
