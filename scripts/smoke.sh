@@ -86,7 +86,8 @@ func Total(xs []int) int {
 EOF
 
 echo "== version"
-"$BIN" version --verbose | head -3
+# Consume all output: head can close the pipe while the musl binary is still writing.
+"$BIN" version --verbose | sed -n '1,3p'
 
 echo "== init"
 out="$("$BIN" init)"; echo "$out"
