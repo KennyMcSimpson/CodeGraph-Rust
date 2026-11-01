@@ -1,7 +1,27 @@
 [package]
 name = "cg-resolve"
+description = "Resolution: symbol tables, scoped name binding, language and framework rules, synthesis passes, index orchestration"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
 [dependencies]
 cg-core = { workspace = true }
+cg-scan = { workspace = true }
+cg-extract = { workspace = true }
+cg-store = { workspace = true }
+rayon = { workspace = true }
+rustc-hash = { workspace = true }
+smallvec = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = { workspace = true }
+memchr = { workspace = true }
+aho-corasick = { workspace = true }
+toml_edit = { workspace = true }
+jsonc-parser = { workspace = true }
+tracing = { workspace = true }
+ignore = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

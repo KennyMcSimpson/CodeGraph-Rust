@@ -231,6 +231,12 @@ fn import_stmt(cx: &mut Cx, n: Node, scope: u32) {
 
 fn export_stmt(cx: &mut Cx, n: Node) {
     let source = n.child_by_field_name("source").map(|s| unquote(cx.text(s)).to_owned());
+    if let Some(spec) = &source {
+        // `export ... from 'x'` depends on module `x`; recorded like a side-effect import so the
+        // module reference resolves to the target file.
+        let line = cx.line(n);
+        cx.add_import(ImportFact { local: String::new(), imported: "*".into(), spec: spec.clone(), kind: ImportKind::SideEffect, type_only: false, scope: 0, line });
+    }
     let is_default = kids(n).any(|c| c.kind() == "default");
     let mut had_clause = false;
     for ch in kids(n) {

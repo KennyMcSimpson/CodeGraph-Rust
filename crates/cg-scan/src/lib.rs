@@ -8,4 +8,4 @@ pub mod testpath;
 mod walk;
 
 pub use rules::IgnoreRules;
-pub use walk::{mtime_ns, rel_string, scan, stat_entry, FileEntry, ScanOptions, ScanResult, MAX_SOURCE_FILE_SIZE_BYTES};
+pub use walk::{find_config_files, mtime_ns, rel_string, scan, stat_entry, FileEntry, ScanOptions, ScanResult, MAX_SOURCE_FILE_SIZE_BYTES};

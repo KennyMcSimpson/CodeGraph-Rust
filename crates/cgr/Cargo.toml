@@ -1,7 +1,27 @@
 [package]
 name = "cgr"
+description = "codegraph-rust: a single static binary that indexes code into a queryable graph and serves it to agents"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[[bin]]
+name = "cgr"
+path = "src/main.rs"
+
 [dependencies]
 cg-core = { workspace = true }
+cg-scan = { workspace = true }
+cg-extract = { workspace = true }
+cg-store = { workspace = true }
+cg-resolve = { workspace = true }
+cg-query = { workspace = true }
+cg-sync = { workspace = true }
+cg-mcp = { workspace = true }
+cg-install = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+mimalloc = { workspace = true }

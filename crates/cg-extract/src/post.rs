@@ -214,3 +214,64 @@ mod tests {
         assert!(!t.contains("// c"));
     }
 }
+
+/// A synthesis "site" found while the source was in memory (design doc 7.2): a pass-specific
+/// observation (a `.emit('x')` call, a `setState` call, ...) keyed for later linking.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SiteFact {
+    pub pass: u16,
+    pub role: u8,
+    /// 0 = name, 1 = file, 2 = node, 3 = pair (see `SiteKey` in cg-store).
+    pub key_kind: u8,
+    pub key_a: String,
+    pub key_b: String,
+    /// Kernel node row the site belongs to (`NONE` = the file).
+    pub node_row: u32,
+    pub line: u32,
+    pub payload: String,
+}
+
+/// What a file hook may add to a file's extraction result.
+#[derive(Default)]
+pub struct HookOut {
+    pub nodes: Vec<ExtraNode>,
+    pub refs: Vec<ExtraRef>,
+    pub sites: Vec<SiteFact>,
+}
+
+pub struct HookCtx<'a> {
+    pub rel: &'a str,
+    pub lang: Lang,
+    pub src: &'a str,
+    pub rows: crate::rows::FileRows<'a>,
+    pub facts: &'a crate::facts::Facts,
+}
+
+/// A per-file extraction add-on: framework `extract` hooks (route nodes, middleware refs) and
+/// synthesis-pass site scanners. Hooks must be deterministic and panic-free on any input.
+pub trait FileHook: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn applies(&self, lang: Lang, rel: &str) -> bool;
+    /// Cheap literal prefilter: skip `run` unless the source contains one of these.
+    fn triggers(&self) -> &'static [&'static str] {
+        &[]
+    }
+    fn run(&self, ctx: &HookCtx<'_>, out: &mut HookOut);
+}
+
+/// First 16 bytes of sha256(`path:kind:name:line`), as the kernel computes node ids.
+pub fn node_digest(path: &str, kind: cg_core::NodeKind, name: &str, line: u32) -> [u8; 16] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(path.as_bytes());
+    h.update(b":");
+    h.update(kind.as_str().as_bytes());
+    h.update(b":");
+    h.update(name.as_bytes());
+    h.update(b":");
+    h.update(line.to_string().as_bytes());
+    let d = h.finalize();
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&d[..16]);
+    out
+}

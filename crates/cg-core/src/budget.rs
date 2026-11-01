@@ -131,6 +131,34 @@ fn macos_available() -> Option<u64> {
     Some(free * page)
 }
 
+/// Peak resident set size of this process in MiB (best effort, 0 if unknown).
+pub fn peak_rss_mb() -> u64 {
+    #[cfg(unix)]
+    {
+        // SAFETY: getrusage fills a plain struct we own.
+        let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) } == 0 {
+            let v = ru.ru_maxrss as u64;
+            // Linux reports KiB, macOS bytes
+            return if cfg!(target_os = "macos") { v >> 20 } else { v >> 10 };
+        }
+    }
+    0
+}
+
+/// Current resident set size in MiB (Linux `/proc/self/statm`; 0 elsewhere).
+pub fn current_rss_mb() -> u64 {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(s) = std::fs::read_to_string("/proc/self/statm") {
+            if let Some(pages) = s.split_whitespace().nth(1).and_then(|v| v.parse::<u64>().ok()) {
+                return pages * 4096 >> 20;
+            }
+        }
+    }
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -163,6 +163,7 @@ rec!(
     key_kind: u8,
     role: u8,
     pass: u16,
+    /// Text-pool ids of the key strings (what the key means depends on the pass).
     key_a: u32,
     key_b: u32,
     node: NodeIdx,

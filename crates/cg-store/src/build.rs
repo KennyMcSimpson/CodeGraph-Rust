@@ -178,6 +178,7 @@ pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
     let mut scopes: Vec<ScopeRec> = Vec::new();
     let mut bindings: Vec<BindingRec> = Vec::new();
     let mut file_facts: Vec<FileFacts> = Vec::with_capacity(batches.len());
+    let mut sites: Vec<SiteRec> = Vec::new();
     let mut fnames: Vec<(u32, u32)> = Vec::with_capacity(batches.len() * 2);
 
     for (fi, b) in batches.iter().enumerate() {
@@ -377,6 +378,20 @@ pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
                 node: NodeIdx(if bd.node_row == NONE || bd.node_row >= ncount as u32 { NONE } else { nstart + bd.node_row }),
             });
         }
+        let ff_site = sites.len() as u32;
+        for st in &b.sites {
+            sites.push(SiteRec {
+                key_kind: st.key_kind,
+                role: st.role,
+                pass: st.pass,
+                key_a: text.intern(&st.key_a),
+                key_b: text.intern(&st.key_b),
+                node: NodeIdx(if st.node_row == NONE || st.node_row >= ncount as u32 { nstart } else { nstart + st.node_row }),
+                line: st.line,
+                payload: StrId(text.intern(&st.payload)),
+                _p: [0; 8],
+            });
+        }
         file_facts.push(FileFacts {
             imp_start: ff_imp,
             imp_count: imports.len() as u32 - ff_imp,
@@ -386,8 +401,8 @@ pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
             scope_count: scopes.len() as u32 - scope_base,
             bind_start: ff_bind,
             bind_count: bindings.len() as u32 - ff_bind,
-            site_start: 0,
-            site_count: 0,
+            site_start: ff_site,
+            site_count: sites.len() as u32 - ff_site,
         });
 
         // ---- references ----
@@ -508,6 +523,11 @@ pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
         rt(&mut b.init_ctor);
     });
     lists.items.par_iter_mut().for_each(|i| *i = text_map[*i as usize]);
+    sites.par_iter_mut().for_each(|st| {
+        st.key_a = text_map[st.key_a as usize];
+        st.key_b = text_map[st.key_b as usize];
+        rt(&mut st.payload);
+    });
     let mut fname_idx: Vec<FileNameRec> =
         fnames.iter().map(|(n, f)| FileNameRec { name: StrId(names_map[*n as usize]), file: FileId(*f) }).collect();
     fname_idx.par_sort_unstable_by_key(|r| (r.name.0, r.file.0));
@@ -578,6 +598,7 @@ pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
     p.scopes = Part::owned(scopes);
     p.bindings = Part::owned(bindings);
     p.file_facts = Part::owned(file_facts);
+    p.sites = Part::owned(sites);
     p.fname_idx = Part::owned(fname_idx);
     // Draft edges: the extraction edges only, so the View is usable before resolution.
     let mut seg = Seg::from_parts(meta, p);

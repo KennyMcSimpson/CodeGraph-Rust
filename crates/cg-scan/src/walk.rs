@@ -228,6 +228,39 @@ fn git_tracked_ignored(root: &Path) -> Vec<String> {
     }
 }
 
+/// Project configuration files that influence resolution (`package.json`, `tsconfig*.json`,
+/// `go.mod`, `Cargo.toml`, `pyproject.toml`, ...), found with the same ignore rules as the scan.
+/// Returns sorted repo-relative paths.
+pub fn find_config_files(root: &Path, config: &ProjectConfig, max_depth: usize) -> Vec<String> {
+    let rules = IgnoreRules::new(root, config);
+    let is_config = |name: &str| {
+        matches!(
+            name,
+            "package.json" | "jsconfig.json" | "go.mod" | "go.work" | "Cargo.toml" | "pyproject.toml" | "setup.cfg"
+                | "setup.py" | "requirements.txt" | "pom.xml" | "build.gradle" | "build.gradle.kts" | "settings.gradle"
+                | "settings.gradle.kts" | "composer.json"
+        ) || (name.starts_with("tsconfig") && name.ends_with(".json"))
+            || (name.starts_with("requirements") && name.ends_with(".txt"))
+    };
+    let mut out = Vec::new();
+    let walker = WalkBuilder::new(root).standard_filters(false).follow_links(false).max_depth(Some(max_depth)).build();
+    for e in walker.flatten() {
+        let Some(rel) = rel_string(root, e.path()) else { continue };
+        if rel.is_empty() {
+            continue;
+        }
+        let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        if rules.is_ignored(&rel, is_dir) {
+            continue;
+        }
+        if !is_dir && is_config(e.file_name().to_str().unwrap_or("")) {
+            out.push(rel);
+        }
+    }
+    out.sort();
+    out
+}
+
 pub fn scan(opts: &ScanOptions) -> ScanResult {
     let rules = Arc::new(IgnoreRules::new(&opts.root, &opts.config));
     let mut parts = walk(&opts.root, rules.clone(), &opts.config, opts.max_file_size, false);

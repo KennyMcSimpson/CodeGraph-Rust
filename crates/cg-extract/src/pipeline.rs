@@ -4,7 +4,7 @@
 //! file index, so the output never depends on thread scheduling.
 
 use crate::facts::{self, Facts};
-use crate::post::{commonjs_require_refs, ExtraNode, ExtraRef};
+use crate::post::{commonjs_require_refs, ExtraNode, ExtraRef, FileHook, HookCtx, HookOut, SiteFact};
 use crate::rows::FileRows;
 use cg_core::{hash, Lang};
 use cg_kernel::{EmitOut, ExtractOptions, KernelError};
@@ -13,7 +13,7 @@ use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Bits of `FileBatch::flags` (stored in `FileRec::flags`, design doc 5.3).
@@ -26,7 +26,7 @@ pub mod fileflags {
     pub const TIMED_OUT: u8 = 32;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ExtractConfig {
     pub root: PathBuf,
     pub threads: usize,
@@ -37,6 +37,8 @@ pub struct ExtractConfig {
     pub overrides: BTreeMap<String, Lang>,
     /// Lower thread priority (Unix nice 10) so a build does not starve the editor.
     pub low_priority: bool,
+    /// Framework extract hooks and synthesis site scanners.
+    pub hooks: Vec<Arc<dyn FileHook>>,
 }
 
 impl ExtractConfig {
@@ -49,6 +51,7 @@ impl ExtractConfig {
             allow_error_trees: true,
             overrides: BTreeMap::new(),
             low_priority: false,
+            hooks: Vec::new(),
         }
     }
 }
@@ -65,6 +68,7 @@ pub struct FileBatch {
     pub emit: EmitOut,
     pub extra_nodes: Vec<ExtraNode>,
     pub extra_refs: Vec<ExtraRef>,
+    pub sites: Vec<SiteFact>,
     pub facts: Facts,
     /// Human-readable problems, e.g. `panic: ...`.
     pub errors: Vec<String>,
@@ -251,7 +255,45 @@ pub fn extract_bytes(rel: &str, bytes: &[u8], mtime_ns: i64, lang_hint: Lang, cf
             (file_node_only(rel, line_count), Facts::default())
         }
     };
-    let extra_refs = commonjs_require_refs(&src, lang);
+    let mut extra_refs = commonjs_require_refs(&src, lang);
+    let (mut extra_nodes, mut sites) = (Vec::new(), Vec::new());
+    if !cfg.hooks.is_empty() && flags & (fileflags::PANICKED | fileflags::TIMED_OUT) == 0 {
+        let rows = FileRows::new(&emit);
+        let ctx = HookCtx { rel, lang, src: &src, rows, facts: &facts };
+        let kcount = rows.node_count() as u32;
+        for hook in &cfg.hooks {
+            if !hook.applies(lang, rel) || (!hook.triggers().is_empty() && !hook.triggers().iter().any(|t| src.contains(t))) {
+                continue;
+            }
+            let mut out = HookOut::default();
+            let r = catch_unwind(AssertUnwindSafe(|| hook.run(&ctx, &mut out)));
+            if r.is_err() {
+                errors.push(format!("panic in hook {}", hook.name()));
+                continue;
+            }
+            // Hook-created nodes are numbered after the kernel's (and after earlier hooks').
+            let base = kcount + extra_nodes.len() as u32;
+            for mut r in out.refs {
+                // refs from hook-created nodes are expressed relative to `kcount`
+                if r.from_row >= kcount {
+                    r.from_row = base + (r.from_row - kcount);
+                }
+                extra_refs.push(r);
+            }
+            for mut s in out.sites {
+                if s.node_row != cg_core::NONE && s.node_row >= kcount {
+                    s.node_row = base + (s.node_row - kcount);
+                }
+                sites.push(s);
+            }
+            for mut n in out.nodes {
+                if n.parent_row >= kcount {
+                    n.parent_row = base + (n.parent_row - kcount);
+                }
+                extra_nodes.push(n);
+            }
+        }
+    }
     FileBatch {
         rel: rel.to_owned(),
         lang,
@@ -260,8 +302,9 @@ pub fn extract_bytes(rel: &str, bytes: &[u8], mtime_ns: i64, lang_hint: Lang, cf
         hash: h,
         flags,
         emit,
-        extra_nodes: Vec::new(),
+        extra_nodes,
         extra_refs,
+        sites,
         facts,
         errors,
     }

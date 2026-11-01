@@ -12,6 +12,7 @@ cg-scan = { workspace = true }
 tree-sitter = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }
+sha2 = { workspace = true }
 rustc-hash = { workspace = true }
 serde_json = { workspace = true }
 smallvec = { workspace = true }
