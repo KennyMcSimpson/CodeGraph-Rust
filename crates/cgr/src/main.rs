@@ -1,6 +1,7 @@
 //! `cgr`: CLI entry point (design doc 11.1).
 
 mod cmds;
+mod hook;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -166,6 +167,47 @@ enum Cmd {
         #[arg(long)]
         no_watch: bool,
     },
+    /// Register the MCP server (and hook) with Claude Code, Cursor and Codex
+    Install {
+        /// Agents to configure: claude-code, cursor, codex (default: every one found on this machine)
+        #[arg(long = "agent", value_name = "AGENT")]
+        agents: Vec<String>,
+        /// Configure the current project instead of the user's home
+        #[arg(long)]
+        local: bool,
+        /// Claude Code: do not add the prompt hook
+        #[arg(long)]
+        no_hook: bool,
+        /// Claude Code: do not pre-approve the explore tool
+        #[arg(long)]
+        no_permissions: bool,
+        #[arg(long)]
+        dry_run: bool,
+        /// Path of the executable to register (default: this one)
+        #[arg(long)]
+        bin: Option<PathBuf>,
+    },
+    /// Undo `install`
+    Uninstall {
+        #[arg(long = "agent", value_name = "AGENT")]
+        agents: Vec<String>,
+        #[arg(long)]
+        local: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        bin: Option<PathBuf>,
+    },
+    /// Remove the index of a project (`.cgr/`)
+    Uninit {
+        path: Option<PathBuf>,
+        /// Do not ask for confirmation
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Hidden: Claude Code UserPromptSubmit hook (reads JSON on stdin)
+    #[command(hide = true)]
+    PromptHook,
     /// Hidden: nothing to unlock (locks are released by the OS when a process exits)
     #[command(hide = true)]
     Unlock,
@@ -229,6 +271,10 @@ fn run(cli: Cli) -> Result<i32> {
         Cmd::Affected { files, stdin, depth, filter, json, quiet } => cmds::affected(base, files, stdin, depth, filter, json, quiet),
         Cmd::Cycles { path, json } => cmds::cycles(path.or(base), json),
         Cmd::Serve { mcp: _, http, token, no_watch } => cmds::serve(base, http, token, no_watch),
+        Cmd::Install { agents, local, no_hook, no_permissions, dry_run, bin } => cmds::install(base, agents, local, !no_hook, !no_permissions, dry_run, bin, true),
+        Cmd::Uninstall { agents, local, dry_run, bin } => cmds::install(base, agents, local, true, true, dry_run, bin, false),
+        Cmd::Uninit { path, yes } => cmds::uninit(path.or(base), yes),
+        Cmd::PromptHook => Ok(hook::run()),
         Cmd::Unlock => {
             println!("Nothing to unlock: locks are held by the operating system and released when a process exits.");
             Ok(0)

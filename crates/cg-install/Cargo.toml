@@ -1,8 +1,16 @@
 [package]
 name = "cg-install"
+description = "Agent integrations: MCP server registration for Claude Code, Cursor and Codex"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
 [dependencies]
 cg-core = { workspace = true }
-cg-store = { workspace = true }
+jsonc-parser = { workspace = true }
+toml_edit = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -227,7 +227,11 @@ name = "cg-install"
 version = "0.1.0"
 dependencies = [
  "cg-core",
- "cg-store",
+ "jsonc-parser",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "toml_edit",
 ]
 
 [[package]]
@@ -665,6 +669,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ecded084f9b9a718d39668a42657c32253663d1f6afb3fbb9134f0305f73f48"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]

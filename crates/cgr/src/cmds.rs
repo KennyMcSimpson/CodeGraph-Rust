@@ -364,3 +364,94 @@ pub fn serve(base: Option<PathBuf>, http: Option<String>, token: Option<String>,
     }
     Ok(0)
 }
+
+#[allow(clippy::too_many_arguments)]
+pub fn install(base: Option<PathBuf>, agents: Vec<String>, local: bool, hook: bool, permissions: bool, dry_run: bool, bin: Option<PathBuf>, installing: bool) -> Result<i32> {
+    use cg_install::{targets, Action, Env, Request};
+    let env = Env::from_process();
+    let project = match base {
+        Some(p) => p.canonicalize().unwrap_or(p),
+        None => env.cwd.clone(),
+    };
+    let bin = match bin {
+        Some(b) => b,
+        None => std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()).ok_or_else(|| anyhow!("cannot determine the path of this executable; pass --bin"))?,
+    };
+    let req = Request { bin, local, project, hook, permissions, dry_run };
+    let all = targets();
+    let chosen: Vec<_> = if agents.is_empty() {
+        all.iter().filter(|t| t.detect(&env)).collect()
+    } else {
+        let mut v = Vec::new();
+        for a in &agents {
+            match all.iter().find(|t| t.id() == a.as_str()) {
+                Some(t) => v.push(t),
+                None => return Err(anyhow!("unknown agent `{a}` (known: {})", all.iter().map(|t| t.id()).collect::<Vec<_>>().join(", "))),
+            }
+        }
+        v
+    };
+    if chosen.is_empty() {
+        println!("No supported agent found on this machine. Name one with --agent ({}).", all.iter().map(|t| t.id()).collect::<Vec<_>>().join(", "));
+        return Ok(1);
+    }
+    for t in chosen {
+        let changes = if installing { t.install(&env, &req) } else { t.uninstall(&env, &req) };
+        match changes {
+            Ok(changes) => {
+                for c in changes {
+                    let verb = match c.action {
+                        Action::Created => "created",
+                        Action::Updated => "updated",
+                        Action::Unchanged => "unchanged",
+                        Action::Removed => "removed",
+                    };
+                    println!("{}: {verb} {} ({}){}", t.display(), c.path.display(), c.what, if dry_run { "  [dry run]" } else { "" });
+                }
+            }
+            Err(e) => {
+                eprintln!("{}: {e}", t.display());
+                return Ok(1);
+            }
+        }
+    }
+    if installing && !dry_run {
+        println!("Restart the agent to pick up the change. Index a project with `{} init`.", brand::BIN_NAME);
+    }
+    Ok(0)
+}
+
+pub fn uninit(path: Option<PathBuf>, yes: bool) -> Result<i32> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let start = start_dir(path)?;
+    let store = cg_store::Store::locate(&start).ok_or_else(|| anyhow!("no {} index found from {}", brand::DATA_DIR, start.display()))?;
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            return Err(anyhow!("refusing to delete {} without --yes (stdin is not a terminal)", store.dir.display()));
+        }
+        print!("Delete {} ? [y/N] ", store.dir.display());
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line)?;
+        if !matches!(line.trim().to_lowercase().as_str(), "y" | "yes") {
+            println!("Cancelled.");
+            return Ok(1);
+        }
+    }
+    let _guard = store.write_lock(std::time::Duration::from_secs(5)).ok();
+    std::fs::remove_dir_all(&store.dir).with_context(|| format!("cannot remove {}", store.dir.display()))?;
+    let exclude = store.root.join(".git/info/exclude");
+    if let Ok(cur) = std::fs::read_to_string(&exclude) {
+        let line = format!("{}/", brand::DATA_DIR);
+        if cur.lines().any(|l| l.trim() == line) {
+            let kept: Vec<&str> = cur.lines().filter(|l| l.trim() != line).collect();
+            let mut out = kept.join("\n");
+            if cur.ends_with('\n') {
+                out.push('\n');
+            }
+            std::fs::write(&exclude, out)?;
+        }
+    }
+    println!("Removed {}.", store.dir.display());
+    Ok(0)
+}
