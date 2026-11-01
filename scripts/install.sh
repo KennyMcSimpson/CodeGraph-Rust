@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install the cgr binary from a GitHub release (Linux and macOS).
 #
-#   curl -fsSL https://raw.githubusercontent.com/NianJiuZst/codegrap-rust/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/NianJiuZst/CodeGraph-Rust/main/scripts/install.sh | sh
 #
 # Environment:
 #   CGR_VERSION      version to install, e.g. 0.1.0 (default: the latest release)
@@ -10,7 +10,7 @@
 #                    <base>/v<version>/cgr-<version>-<target>.tar.gz and its .sha256 must exist there
 set -eu
 
-REPO="NianJiuZst/codegrap-rust"
+REPO="NianJiuZst/CodeGraph-Rust"
 BASE="${CGR_BASE_URL:-https://github.com/$REPO/releases/download}"
 DEST="${CGR_INSTALL_DIR:-$HOME/.local/bin}"
 

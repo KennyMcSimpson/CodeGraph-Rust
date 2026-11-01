@@ -130,8 +130,8 @@ Source installation is the currently available path. Requirements are **Rust 1.8
 Cargo, Git and a C compiler toolchain for the Tree-sitter grammars.
 
 ```sh
-git clone https://github.com/NianJiuZst/CodeGrap-Rust.git
-cd CodeGrap-Rust
+git clone https://github.com/NianJiuZst/CodeGraph-Rust.git
+cd CodeGraph-Rust
 cargo install --path crates/cgr --locked
 cgr version --verbose
 ```
@@ -153,17 +153,17 @@ On Windows, the executable is `target\release\cgr.exe`.
 
 The repository includes release packaging and checksum-verifying download scripts. **As of
 2026-11-01, no GitHub Release has been published.** The following commands require published
-archives and checksum files on the [Releases page](https://github.com/NianJiuZst/CodeGrap-Rust/releases).
+archives and checksum files on the [Releases page](https://github.com/NianJiuZst/CodeGraph-Rust/releases).
 Until those assets are available, use the source installation above.
 
 ```sh
 # Linux / macOS — requires a published release
-curl -fsSL https://raw.githubusercontent.com/NianJiuZst/CodeGrap-Rust/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/NianJiuZst/CodeGraph-Rust/main/scripts/install.sh | sh
 ```
 
 ```powershell
 # Windows, PowerShell 7+ — requires a published release
-irm https://raw.githubusercontent.com/NianJiuZst/CodeGrap-Rust/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/NianJiuZst/CodeGraph-Rust/main/scripts/install.ps1 | iex
 ```
 
 Release automation defines these targets:
@@ -497,7 +497,7 @@ The historical benchmark revision passed 116 tests. Implementation checks are re
 see [the performance report](docs/BENCHMARKS.md#full-indexing).
 Local measurements and hosted CI results are separate evidence.
 
-Code revision `f82506e` passed all nine [hosted CI checks](https://github.com/NianJiuZst/CodeGrap-Rust/actions/runs/41286327676),
+Code revision `f82506e` passed all nine [hosted CI checks](https://github.com/NianJiuZst/CodeGraph-Rust/actions/runs/41286327676),
 including Linux/macOS/Windows tests and end-to-end smoke, lint, kernel reproducibility and the
 static Linux build. Hosted correctness results are not used as performance measurements.
 
