@@ -150,15 +150,18 @@ fn method_types(sig: &str) -> Option<(usize, usize, Sig)> {
 /// What a method matches an interface method by: its name, plus its package when unexported.
 fn method_key(view: &cg_store::View, m: NodeIdx) -> String {
     let node = view.node(m);
-    let name = node.name();
+    name_key(view, node.file(), node.name())
+}
+
+fn name_key(view: &cg_store::View, file: cg_core::FileId, name: &str) -> String {
     if name.chars().next().is_some_and(char::is_uppercase) {
         name.to_owned()
     } else {
-        format!("{}\0{name}", parent_dir(view.file(node.file()).path()))
+        format!("{}\0{name}", parent_dir(view.file(file).path()))
     }
 }
 
-pub(super) fn go_implements(e: &Engine<'_>, out: &mut Out) -> Vec<(NodeIdx, NodeIdx)> {
+pub(super) fn go_implements(e: &Engine<'_>, out: &mut Out) {
     let view = e.view;
     let mut implementers: Vec<NodeIdx> = Vec::new();
     let mut interfaces: Vec<NodeIdx> = Vec::new();
@@ -208,6 +211,12 @@ pub(super) fn go_implements(e: &Engine<'_>, out: &mut Out) -> Vec<(NodeIdx, Node
             }
         }
     }
+    let stable_key = |n: &NodeIdx| {
+        let node = view.node(*n);
+        (view.file(node.file()).path(), node.start_line(), node.start_col(), node.name())
+    };
+    implementers.sort_by_key(stable_key);
+    interfaces.sort_by_key(stable_key);
     // a type's own methods: those in its body (interfaces) and the receiver methods its
     // package declares anywhere
     for &t in &interfaces {
@@ -225,6 +234,20 @@ pub(super) fn go_implements(e: &Engine<'_>, out: &mut Out) -> Vec<(NodeIdx, Node
             }
         }
     }
+    // A field at the same or a shallower embedding depth also blocks a promoted method.
+    let mut fields_of: FxHashMap<NodeIdx, Vec<String>> = FxHashMap::default();
+    for &t in &implementers {
+        let node = view.node(t);
+        let f = node.file();
+        let start = cg_core::text::pack_pos(node.start_line(), node.start_col());
+        let Some((scope, _)) = view.scopes_of(f).iter().enumerate().find(|(_, s)| s.kind == cg_extract::ScopeKind::Class as u8 && s.start == start) else {
+            continue;
+        };
+        let scope = view.scope_base(f) + scope as u32;
+        for b in view.bindings_of(f).iter().filter(|b| b.scope.0 == scope && b.kind == cg_extract::BindKind::Field as u8) {
+            fields_of.entry(t).or_default().push(name_key(view, f, view.text_str(b.name)));
+        }
+    }
     // embedding: Go records it as `extends`
     let embeds = |t: NodeIdx| -> Vec<NodeIdx> { e.direct_supers(t).iter().copied().filter(|s| is_go_type.contains(s)).collect() };
     let closure = |t: NodeIdx| -> Vec<NodeIdx> {
@@ -240,16 +263,57 @@ pub(super) fn go_implements(e: &Engine<'_>, out: &mut Out) -> Vec<(NodeIdx, Node
         }
         seen
     };
-    // method set: key -> the signatures declared for it (None: a signature that doesn't read)
-    type MethodSet = FxHashMap<String, Vec<Option<(usize, usize, Sig)>>>;
-    let method_set = |t: NodeIdx| -> MethodSet {
+    // For interfaces retain declarations from embedded interfaces. For concrete types, Go
+    // selects the shallowest embedded method; two paths at that depth are ambiguous even if
+    // they eventually lead to the same declaration (a diamond).
+    type MethodSet = FxHashMap<String, Vec<(NodeIdx, Option<(usize, usize, Sig)>)>>;
+    let interface_methods = |t: NodeIdx| -> MethodSet {
         let mut set: MethodSet = FxHashMap::default();
         for ty in closure(t) {
             for &m in methods_of.get(&ty).map(Vec::as_slice).unwrap_or(&[]) {
-                set.entry(method_key(view, m)).or_default().push(view.node(m).signature().and_then(method_types));
+                set.entry(method_key(view, m)).or_default().push((m, view.node(m).signature().and_then(method_types)));
             }
         }
         set
+    };
+    let concrete_methods = |t: NodeIdx| -> MethodSet {
+        let mut selected: FxHashMap<String, (usize, Vec<NodeIdx>, bool)> = FxHashMap::default();
+        let mut frontier = vec![(t, vec![t])];
+        for depth in 0..10 {
+            if frontier.is_empty() {
+                break;
+            }
+            if frontier.len() > 1024 {
+                return MethodSet::default();
+            }
+            let mut next = Vec::new();
+            for (ty, path) in frontier {
+                for &m in methods_of.get(&ty).map(Vec::as_slice).unwrap_or(&[]) {
+                    let entry = selected.entry(method_key(view, m)).or_insert_with(|| (depth, Vec::new(), false));
+                    if entry.0 == depth {
+                        entry.1.push(m);
+                    }
+                }
+                for key in fields_of.get(&ty).into_iter().flatten() {
+                    let entry = selected.entry(key.clone()).or_insert_with(|| (depth, Vec::new(), false));
+                    if entry.0 == depth {
+                        entry.2 = true;
+                    }
+                }
+                for embedded in embeds(ty) {
+                    if !path.contains(&embedded) {
+                        let mut child = path.clone();
+                        child.push(embedded);
+                        next.push((embedded, child));
+                    }
+                }
+            }
+            frontier = next;
+        }
+        selected
+            .into_iter()
+            .filter_map(|(k, (_, ms, field))| (ms.len() == 1 && !field).then(|| (k, vec![(ms[0], view.node(ms[0]).signature().and_then(method_types))])))
+            .collect()
     };
     let open = |t: &Option<String>| -> bool {
         match t {
@@ -263,17 +327,16 @@ pub(super) fn go_implements(e: &Engine<'_>, out: &mut Out) -> Vec<(NodeIdx, Node
         let (Some(h), Some(w)) = (have, want) else { return true };
         h.0 == w.0 && h.1 == w.1 && h.2.iter().zip(&w.2).all(|(a, b)| a == b || open(a) || open(b))
     };
-    let sets: Vec<(NodeIdx, MethodSet)> = implementers.iter().map(|&t| (t, method_set(t))).filter(|(_, s)| !s.is_empty()).collect();
-    let mut pairs = Vec::new();
+    let sets: Vec<(NodeIdx, MethodSet)> = implementers.iter().map(|&t| (t, concrete_methods(t))).filter(|(_, s)| !s.is_empty()).collect();
     for &iface in &interfaces {
-        let want = method_set(iface);
+        let want = interface_methods(iface);
         if want.is_empty() {
             continue; // `any` would match everything
         }
         let mut direct = Vec::new();
         let mut promoted = Vec::new();
         for (t, have) in &sets {
-            let covers = want.iter().all(|(key, wanted)| have.get(key).is_some_and(|got| wanted.iter().any(|w| got.iter().any(|g| fits(g, w)))));
+            let covers = want.iter().all(|(key, wanted)| have.get(key).is_some_and(|got| wanted.iter().all(|(_, w)| got.iter().any(|(_, g)| fits(g, w)))));
             if !covers || embeds(*t).contains(&iface) {
                 continue;
             }
@@ -297,10 +360,37 @@ pub(super) fn go_implements(e: &Engine<'_>, out: &mut Out) -> Vec<(NodeIdx, Node
                 Some(("via", view.node(iface).name())),
                 super::order_of("go-implements"),
             );
-            pairs.push((t, iface));
+            // Link the interface method to the actual declaration selected by Go's embedded
+            // method set, including methods declared in another file or embedded type.
+            if let Some((_, have)) = sets.iter().find(|(ty, _)| *ty == t) {
+                let mut added = 0;
+                let mut wanted_methods: Vec<_> = want.iter().collect();
+                wanted_methods.sort_by_key(|(key, _)| *key);
+                for (key, wanted) in wanted_methods {
+                    for (bm, _) in wanted {
+                        for (m, _) in have.get(key).into_iter().flatten() {
+                            if added >= super::MAX_IMPLS_PER_PAIR || bm == m {
+                                continue;
+                            }
+                            let method = view.node(*m);
+                            let at = format!("{}:{}", view.file(method.file()).path(), method.start_line());
+                            out.push(
+                                EdgeKind::Calls,
+                                *bm,
+                                *m,
+                                view.node(*bm).start_line(),
+                                "interface-impl",
+                                Some(at),
+                                Some(("via", method.name())),
+                                super::order_of("interface-impl"),
+                            );
+                            added += 1;
+                        }
+                    }
+                }
+            }
         }
     }
-    pairs
 }
 
 #[cfg(test)]

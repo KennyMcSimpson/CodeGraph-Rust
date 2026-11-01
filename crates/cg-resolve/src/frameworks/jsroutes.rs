@@ -366,6 +366,10 @@ re!(capital_tag_re, r"<\s*([A-Z][\w.]*)");
 re!(wrapper_re, r"^(?:Suspense|ErrorBoundary|\w*(?:Guard|Provider|Wrapper|Route)|(?:Protected|Private|Auth|Require\w*)\w*)$");
 re!(router_element_re, r"^(?:Browser|Hash|Memory|Native|Static|History|unstable_History)?Router$");
 re!(router_call_re, r"\b(?:createBrowserRouter|createHashRouter|createMemoryRouter|createRoutesFromElements|useRoutes)\b");
+re!(route_array_re, r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)(?:\s*:\s*[^=;\n]+)?\s*=\s*\[");
+re!(default_route_array_re, r"\bexport\s+default\s*\[");
+re!(route_table_call_re, r"\b(?:createBrowserRouter|createHashRouter|createMemoryRouter|useRoutes)\s*\(");
+re!(route_table_name_re, r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?$");
 
 /// The component an `element` renders: the first tag that is no guard, provider or outlet.
 fn element_component(value: &str) -> Option<String> {
@@ -411,7 +415,11 @@ impl<'a> RrScan<'a> {
         while j > 0 && self.b[j - 1].is_ascii_whitespace() {
             j -= 1;
         }
-        &self.s[j.saturating_sub(12)..j]
+        let mut start = j.saturating_sub(12);
+        while !self.s.is_char_boundary(start) {
+            start += 1;
+        }
+        &self.s[start..j]
     }
 
     /// One syntactic unit starting at `at`: a string, a JSX element, a bracketed group or one
@@ -438,16 +446,22 @@ impl<'a> RrScan<'a> {
                 return at + 1;
             }
             b'{' | b'[' | b'(' => {}
-            _ => return at + 1,
+            _ => return at + self.s[at..].chars().next().map_or(1, char::len_utf8),
         }
         let close = match c {
             b'{' => b'}',
             b'[' => b']',
             _ => b')',
         };
-        let routers_call = c == b'(' && self.s[at.saturating_sub(48)..at].trim_end().ends_with(|ch: char| ch.is_alphanumeric()) && {
-            let before = self.s[at.saturating_sub(48)..at].trim_end();
-            before.ends_with("createRoutesFromElements") || before.ends_with("createRoutesFromChildren")
+        let mut before_start = at.saturating_sub(48);
+        while !self.s.is_char_boundary(before_start) {
+            before_start += 1;
+        }
+        let routers_call = c == b'(' && self.s[before_start..at].trim_end().ends_with(|ch: char| ch.is_alphanumeric()) && {
+            let before = self.s[before_start..at].trim_end();
+            ["createRoutesFromElements", "createRoutesFromChildren", "createBrowserRouter", "createHashRouter", "createMemoryRouter", "useRoutes"]
+                .iter()
+                .any(|name| before.ends_with(name))
         };
         let mut fields: Vec<(&'a str, &'a str, usize)> = Vec::new();
         let mut i = at + 1;
@@ -650,6 +664,10 @@ impl<'a> RrScan<'a> {
         }
         i += 1;
         while i < self.b.len() {
+            if !self.s.is_char_boundary(i) {
+                i += 1;
+                continue;
+            }
             if self.s[i..].starts_with("</") {
                 let end = self.s[i + 2..].find('>').map_or(self.b.len(), |e| i + 2 + e + 1);
                 return close(self, end);
@@ -670,6 +688,10 @@ impl<'a> RrScan<'a> {
 
 /// The routes a file's own text declares (upstream `scanRoutes` for one file).
 pub fn scan_react_router(rel: &str, src: &str) -> Vec<Route> {
+    scan_react_router_detailed(rel, src).into_iter().map(|(route, _)| route).collect()
+}
+
+fn scan_react_router_detailed(rel: &str, src: &str) -> Vec<(Route, bool)> {
     let objects = router_call_re().is_match(src);
     if !objects && !src.contains("<Route") {
         return Vec::new();
@@ -723,10 +745,110 @@ pub fn scan_react_router(rel: &str, src: &str) -> Vec<Route> {
         }
         let line = line_at(src, s.at);
         let handlers = s.component.iter().map(|c| Handler { name: c.clone(), line, col: 0 }).collect();
-        out.push(Route { method: String::new(), path, line, handlers, ref_kind: RefKind::Edge(EdgeKind::References), router: Some("react-router") });
+        let absolute = around(s.start, s.end).into_iter().chain(std::iter::once(*s)).any(|o| o.part.as_deref().is_some_and(|p| p.starts_with('/')));
+        out.push((
+            Route { method: String::new(), path, line, handlers, ref_kind: RefKind::Edge(EdgeKind::References), router: Some("react-router") },
+            absolute,
+        ));
     }
-    out.sort_by_key(|r| r.line);
-    out.dedup_by(|a, b| a.path == b.path && a.line == b.line);
+    out.sort_by_key(|r| r.0.line);
+    out.dedup_by(|a, b| a.0.path == b.0.path && a.0.line == b.0.line);
+    out
+}
+
+/// Route-object arrays declared separately from the router that consumes them. The nodes are
+/// candidates: navigation uses them only after an actual router call resolves to this binding.
+fn route_arrays(src: &str) -> Vec<(String, usize, usize)> {
+    let mut arrays = Vec::new();
+    for cap in route_array_re().captures_iter(src) {
+        let open = cap.get(0).unwrap().end() - 1;
+        if let Some(close) = match_bracket(src, open) {
+            arrays.push((cap[1].to_owned(), open, close));
+        }
+    }
+    for hit in default_route_array_re().find_iter(src) {
+        let open = hit.end() - 1;
+        if let Some(close) = match_bracket(src, open) {
+            arrays.push(("#default".to_owned(), open, close));
+        }
+    }
+    arrays
+}
+
+pub fn scan_react_tables(rel: &str, src: &str) -> Vec<(String, Route, bool)> {
+    if !src.contains("export") {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (name, open, close) in route_arrays(src) {
+        let wrapped = format!("createBrowserRouter({})", &src[open..=close]);
+        let line_offset = line_at(src, open) - 1;
+        for (mut route, absolute) in scan_react_router_detailed(rel, &wrapped) {
+            route.line += line_offset;
+            for handler in &mut route.handlers {
+                handler.line += line_offset;
+            }
+            route.router = Some("react-router-table");
+            out.push((name.clone(), route, absolute));
+        }
+    }
+    out
+}
+
+/// A reference to an array used as the router's input or a route object's children.
+pub struct ReactTableUse {
+    pub owner: String,
+    pub name: String,
+    pub prefix: String,
+    pub absolute: bool,
+}
+
+fn react_refs(expr: &str, owner: &str, prefix: &str, absolute: bool, out: &mut Vec<ReactTableUse>, depth: u8) {
+    if depth > 16 {
+        return;
+    }
+    let expr = expr.trim();
+    let name = expr.strip_prefix("...").unwrap_or(expr).trim();
+    if route_table_name_re().is_match(name) {
+        out.push(ReactTableUse { owner: owner.to_owned(), name: name.to_owned(), prefix: prefix.to_owned(), absolute });
+        return;
+    }
+    if expr.starts_with('[') && match_bracket(expr, 0) == Some(expr.len() - 1) {
+        let body = &expr[1..expr.len() - 1];
+        let mut start = 0;
+        while start < body.len() {
+            let end = super::href::index_at_depth0(body, b',', start).unwrap_or(body.len());
+            react_refs(&body[start..end], owner, prefix, absolute, out, depth + 1);
+            start = end + 1;
+        }
+    } else if expr.starts_with('{') && match_bracket(expr, 0) == Some(expr.len() - 1) {
+        let part = match object_field(expr, "path") {
+            Some(p) => match literal(p) {
+                Some(p) => p,
+                None => return,
+            },
+            None => String::new(),
+        };
+        let is_absolute = absolute || part.starts_with('/');
+        let path = compose_route_path(&[prefix, &part]);
+        if let Some(children) = object_field(expr, "children") {
+            react_refs(children, owner, &path, is_absolute, out, depth + 1);
+        }
+    }
+}
+
+pub fn react_table_uses(src: &str) -> Vec<ReactTableUse> {
+    let mut out = Vec::new();
+    for m in route_table_call_re().find_iter(src) {
+        if let Some(first) = crate::synth::scan::call_args(src, m.end() - 1).and_then(|args| args.first().copied()) {
+            react_refs(first, "", "", false, &mut out, 0);
+        }
+    }
+    if src.contains("export") {
+        for (name, open, close) in route_arrays(src) {
+            react_refs(&src[open..=close], &name, "", false, &mut out, 0);
+        }
+    }
     out
 }
 

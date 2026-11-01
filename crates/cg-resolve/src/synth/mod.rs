@@ -179,24 +179,24 @@ fn overrides_of(e: &Engine<'_>, base: NodeIdx, impls: &[NodeIdx]) -> Vec<NodeIdx
 
 /// A call through a supertype's method lands on what a subtype declares for it (upstream
 /// `interfaceOverrideEdges`): per concrete type and each direct supertype, every base method
-/// links to the type's own methods of that name (a Go unexported name: of that package),
-/// overloads paired by their parameters, a JS static only to a static. Capped per (type,
-/// supertype) pair. A Go struct's supertype that is no interface is an embedding, which
-/// dispatches nothing.
-fn interface_impl(e: &Engine<'_>, go_pairs: &[(NodeIdx, NodeIdx)], out: &mut Out) {
+/// links to the type's own methods of that name, overloads paired by their parameters,
+/// a JS static only to a static. Capped per (type, supertype) pair. Go's structural and
+/// promoted method dispatch is handled together by `go_implements`.
+fn interface_impl(e: &Engine<'_>, out: &mut Out) {
     let view = e.view;
     let mut sups: FxHashMap<NodeIdx, Vec<NodeIdx>> = FxHashMap::default();
     for (sub, list) in &e.supers {
         sups.entry(*sub).or_default().extend(list.iter().copied());
-    }
-    for (sub, sup) in go_pairs {
-        sups.entry(*sub).or_default().push(*sup);
     }
     let mut types: Vec<NodeIdx> = sups.keys().copied().collect();
     types.sort();
     for cls in types {
         let cn = view.node(cls);
         let lang = view.file(cn.file()).lang();
+        // Go structural matching and dispatch share the same promoted method set.
+        if lang == Lang::Go {
+            continue;
+        }
         let concrete = matches!(cn.kind(), NodeKind::Class | NodeKind::Struct | NodeKind::Union)
             || (lang == Lang::Go && cn.kind() == NodeKind::TypeAlias)
             || (lang == Lang::Rust && cn.kind() == NodeKind::Enum);
@@ -396,8 +396,8 @@ fn jsx_render<'e, 'v>(e: &'e Engine<'v>, out: &mut Out, wcx: &mut WorkerCx<'e, '
 pub fn run_all(e: &Engine<'_>) -> SynthOutput {
     let mut out = Out { edges: Vec::new(), emeta: Vec::new(), meta_ids: FxHashMap::default() };
     let mut wcx = WorkerCx::new();
-    let go_pairs = go::go_implements(e, &mut out);
-    interface_impl(e, &go_pairs, &mut out);
+    go::go_implements(e, &mut out);
+    interface_impl(e, &mut out);
     event_emitter(e, &mut out, &mut wcx, None);
     react_render(e, &mut out, None);
     jsx_render(e, &mut out, &mut wcx, None);
@@ -546,8 +546,8 @@ pub fn run_incremental(e: &Engine<'_>, previous: &View, changed: &FxHashSet<u32>
         }
     }
     let mut wcx = WorkerCx::new();
-    let go_pairs = go::go_implements(e, &mut out);
-    interface_impl(e, &go_pairs, &mut out);
+    go::go_implements(e, &mut out);
+    interface_impl(e, &mut out);
     event_emitter(e, &mut out, &mut wcx, Some(&keys));
     react_render(e, &mut out, Some(changed));
     jsx_render(e, &mut out, &mut wcx, Some(changed));

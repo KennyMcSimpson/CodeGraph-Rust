@@ -4,6 +4,7 @@
 pub mod href;
 pub mod jsroutes;
 pub mod nav;
+pub mod nest;
 pub mod routes;
 
 use crate::project::ProjectInfo;
@@ -29,6 +30,9 @@ pub fn hooks(project: &ProjectInfo) -> Vec<Arc<dyn FileHook>> {
     if frameworks.iter().any(|f| f == "next") {
         v.push(Arc::new(nav::ProxyScanner));
     }
+    if frameworks.iter().any(|f| f == "nestjs") {
+        v.push(Arc::new(nest::NestScanner));
+    }
     for name in frameworks {
         let fw = match name.as_str() {
             "express" => Framework::Express,
@@ -47,4 +51,25 @@ pub fn hooks(project: &ProjectInfo) -> Vec<Arc<dyn FileHook>> {
         v.push(Arc::new(RouteHook { fw }));
     }
     v
+}
+
+/// Resolve a JS binding using the project's import/export tables, including barrel exports.
+pub(crate) fn js_symbol(e: &crate::engine::Engine<'_>, file: cg_core::FileId, name: &str) -> Option<cg_core::NodeIdx> {
+    use crate::engine::Bound;
+    let view = e.view;
+    let (head, tail) = name.split_once('.').map_or((name, None), |(h, t)| (h, Some(t)));
+    if head.is_empty() || !head.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+        return None;
+    }
+    if let Some(i) = view.imports_of(file).iter().position(|imp| view.text_str(imp.local) == head) {
+        return match (e.bind_import(file, i), tail) {
+            (Bound::Node(n), None) => Some(n),
+            (Bound::Module(f), Some(member)) if !member.contains('.') => match e.lookup_export(f, member, 0) {
+                Some(Bound::Node(n)) => Some(n),
+                _ => None,
+            },
+            _ => None,
+        };
+    }
+    tail.is_none().then(|| e.lookup_top_level(file, head)).flatten()
 }

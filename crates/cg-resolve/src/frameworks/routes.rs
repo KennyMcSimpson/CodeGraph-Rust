@@ -513,12 +513,43 @@ impl FileHook for RouteHook {
                 "@EventPattern",
                 "@SubscribeMessage",
             ],
-            Framework::ReactRouter => &["<Route", "createBrowserRouter", "createHashRouter", "createMemoryRouter", "createRoutesFromElements", "useRoutes"],
+            Framework::ReactRouter => &[
+                "<Route",
+                "createBrowserRouter",
+                "createHashRouter",
+                "createMemoryRouter",
+                "createRoutesFromElements",
+                "useRoutes",
+                "const ",
+                "let ",
+                "var ",
+                "export default",
+            ],
             Framework::TanStack => &["createFileRoute", "createLazyFileRoute", "createRoute", "createRootRoute"],
         }
     }
     fn run(&self, ctx: &HookCtx<'_>, out: &mut HookOut) {
-        let routes = scan(self.fw, ctx.lang, ctx.rel, ctx.src);
+        let mut routes: Vec<(Option<(String, bool)>, Route)> = scan(self.fw, ctx.lang, ctx.rel, ctx.src).into_iter().map(|r| (None, r)).collect();
+        if self.fw == Framework::ReactRouter {
+            let code = cg_extract::post::strip_js_comments(ctx.src);
+            let candidates = super::jsroutes::scan_react_tables(ctx.rel, &code);
+            // The ordinary scanner sees every object when the file also creates a router.
+            // Keep array declarations as candidates so only the consumed table is active.
+            routes.retain(|(_, r)| !candidates.iter().any(|(_, c, _)| c.line == r.line && c.path == r.path));
+            routes.extend(candidates.into_iter().map(|(name, r, absolute)| (Some((name, absolute)), r)));
+            for usage in super::jsroutes::react_table_uses(&code) {
+                out.sites.push(cg_extract::SiteFact {
+                    pass: crate::synth::sites::PASS_REACT_TABLE,
+                    role: 1,
+                    key_kind: 0,
+                    key_a: usage.name,
+                    key_b: usage.owner,
+                    node_row: cg_core::NONE,
+                    line: 0,
+                    payload: format!("{}{}", if usage.absolute { "a" } else { "r" }, usage.prefix),
+                });
+            }
+        }
         if self.fw == Framework::Express && ctx.src.contains(".use(") {
             let code = cg_extract::post::strip_js_comments(ctx.src);
             for (prefix, target, line) in express_mounts(&code) {
@@ -535,7 +566,10 @@ impl FileHook for RouteHook {
             }
         }
         let kcount = ctx.rows.node_count() as u32;
-        for r in routes {
+        for (table, mut r) in routes {
+            if self.fw == Framework::Nest {
+                r.router = Some("nestjs");
+            }
             // a page is named by its path alone; a server route by its method and path
             let (name, qname) = if r.method.is_empty() {
                 (r.path.clone(), format!("{}::route:{}", ctx.rel, r.path))
@@ -559,6 +593,18 @@ impl FileHook for RouteHook {
                 parent_row: 0,
                 exported: None,
             });
+            if let Some((table, absolute)) = table {
+                out.sites.push(cg_extract::SiteFact {
+                    pass: crate::synth::sites::PASS_REACT_TABLE,
+                    role: 0,
+                    key_kind: 0,
+                    key_a: table,
+                    key_b: String::new(),
+                    node_row: row,
+                    line: r.line,
+                    payload: if absolute { "a" } else { "r" }.to_owned(),
+                });
+            }
             for h in r.handlers {
                 out.refs.push(ExtraRef { from_row: row, kind: r.ref_kind, name: h.name, line: h.line, col: h.col });
             }

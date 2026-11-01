@@ -209,11 +209,18 @@ MCP 服务运行且启用监听时，会在防抖后自动同步源码变化。
 
 ### 框架与动态分派规则
 
-已实现 **Express、Flask、FastAPI、Django、Gin、Spring、Axum、Next.js** 的路由提取 hook。
+已实现 **Express、Flask、FastAPI、Django、Gin、Spring、Axum、Next.js、NestJS、React Router 和 TanStack Router** 的路由提取 hook。
 框架检测依赖项目清单，因此缺失依赖声明或索引框架自身仓库时，路由覆盖可能不同；实测文档记录了已观察到的差异。
 
 合成边规则覆盖接口与实现分派、Go 结构化接口、事件发射器处理函数、React 重新渲染、JSX 父子组件关系等模式。
 这些规则带有来源信息和数量限制，属于针对特定模式的启发式分析，不覆盖任意运行时行为。
+
+NestJS 中，可静态读取的 `RouterModule.register` 路径和由 `NestFactory.create` 创建的应用上的字面量
+`setGlobalPrefix`（包括可读取的排除项）会参与 HTTP 客户端匹配；路由节点名称仍使用控制器内的路径。
+React Router 支持通过导入和转导出使用其他文件中的导出路由数组，包括字面量父路由和 `children` 数组。
+索引会保留导出数组的候选路由节点，但只有被已识别的路由器调用使用的数组才参与导航匹配。
+动态路由配置不在此跨文件规则的覆盖范围内。
+Go 接口分派包含无歧义的提升方法；方法集推断仍是有界的静态近似。
 
 当前版本暂不支持 C/C++、C#、PHP、Ruby、Swift 等上游语言，也不包含 Vue/Svelte 专用提取逻辑。
 

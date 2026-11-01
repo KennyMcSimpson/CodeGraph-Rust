@@ -765,6 +765,7 @@ struct HttpRoute {
     node: NodeIdx,
     method: String,
     segs: Vec<String>,
+    excluded: Vec<(Option<String>, Vec<String>)>,
 }
 
 const HTTP_VERBS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "ALL", "ANY"];
@@ -833,6 +834,7 @@ fn mount_prefixes(e: &Engine<'_>) -> FxHashMap<FileId, String> {
 fn http_routes(e: &Engine<'_>) -> Vec<HttpRoute> {
     let view = e.view;
     let prefixes = mount_prefixes(e);
+    let nest_paths = crate::frameworks::nest::effective_paths(e);
     let mut out = Vec::new();
     for f in view.files() {
         let prefix = prefixes.get(&f).map(String::as_str).filter(|p| *p != "/");
@@ -847,11 +849,22 @@ fn http_routes(e: &Engine<'_>) -> Vec<HttpRoute> {
             if !HTTP_VERBS.contains(&method.as_str()) || !path.trim().starts_with('/') {
                 continue;
             }
-            let path = match prefix {
-                Some(p) => join_paths(p, path.trim()),
-                None => path.trim().to_owned(),
-            };
-            out.push(HttpRoute { node: n, method, segs: path.split('/').filter(|s| !s.is_empty()).map(str::to_owned).collect() });
+            let paths = nest_paths.get(&n).cloned().unwrap_or_else(|| {
+                let path = match prefix {
+                    Some(p) => join_paths(p, path.trim()),
+                    None => path.trim().to_owned(),
+                };
+                vec![crate::frameworks::nest::EffectivePath { path, method: None, excluded: Vec::new() }]
+            });
+            for path in paths {
+                let segments = |p: &str| p.split('/').filter(|s| !s.is_empty()).map(str::to_owned).collect();
+                out.push(HttpRoute {
+                    node: n,
+                    method: path.method.unwrap_or_else(|| method.clone()),
+                    segs: segments(&path.path),
+                    excluded: path.excluded.into_iter().map(|(method, path)| (method, segments(&path))).collect(),
+                });
+            }
         }
     }
     out
@@ -956,6 +969,18 @@ fn match_http<'r>(method: &str, segs: &[String], suffix: bool, routes: &'r [Http
         if r.method != "ALL" && r.method != "ANY" && r.method != method {
             continue;
         }
+        if r.excluded.iter().any(|(m, path)| {
+            if m.as_ref().is_some_and(|m| m != method) {
+                return false;
+            }
+            if suffix {
+                path.len() >= segs.len() && score_path(segs, &path[path.len() - segs.len()..]).is_some()
+            } else {
+                score_path(segs, path).is_some()
+            }
+        }) {
+            continue;
+        }
         let score = if suffix {
             // a base URL hides a prefix the route may spell out: two segments of tail at least,
             // two of hidden prefix at most
@@ -969,7 +994,8 @@ fn match_http<'r>(method: &str, segs: &[String], suffix: bool, routes: &'r [Http
         let Some(score) = score else { continue };
         match best {
             Some((_, b)) if score < b => {}
-            Some((_, b)) if score == b => tied = true,
+            Some((current, b)) if score == b && current.node != r.node => tied = true,
+            Some((_, b)) if score == b => {}
             _ => {
                 best = Some((r, score));
                 tied = false;
@@ -1495,10 +1521,10 @@ mod tests {
     #[test]
     fn http_paths() {
         let routes = vec![
-            HttpRoute { node: NodeIdx(1), method: "GET".into(), segs: vec!["api".into(), "users".into()] },
-            HttpRoute { node: NodeIdx(2), method: "GET".into(), segs: vec!["api".into(), "users".into(), ":id".into()] },
-            HttpRoute { node: NodeIdx(3), method: "GET".into(), segs: vec!["api".into(), "users".into(), "top".into()] },
-            HttpRoute { node: NodeIdx(4), method: "POST".into(), segs: vec!["api".into(), "users".into()] },
+            HttpRoute { node: NodeIdx(1), method: "GET".into(), segs: vec!["api".into(), "users".into()], excluded: vec![] },
+            HttpRoute { node: NodeIdx(2), method: "GET".into(), segs: vec!["api".into(), "users".into(), ":id".into()], excluded: vec![] },
+            HttpRoute { node: NodeIdx(3), method: "GET".into(), segs: vec!["api".into(), "users".into(), "top".into()], excluded: vec![] },
+            HttpRoute { node: NodeIdx(4), method: "POST".into(), segs: vec!["api".into(), "users".into()], excluded: vec![] },
         ];
         let m = |method: &str, raw: &str, base: Option<&str>| {
             client_path(raw, base).and_then(|(s, suffix)| match_http(method, &s, suffix, &routes)).map(|r| r.node)
