@@ -108,6 +108,7 @@ impl ProjectInfo {
                 "go.mod" => {
                     for l in text.lines() {
                         let t = l.trim();
+                        let t = t.strip_prefix("require ").map(str::trim).unwrap_or(t);
                         if !t.starts_with("module ") && !t.starts_with("//") && t.contains('/') {
                             info.go_mod_deps.push(t.split_whitespace().next().unwrap_or("").to_owned());
                         }

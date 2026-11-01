@@ -246,3 +246,63 @@ fn debug_python_typing_and_package() {
         }
     }
 }
+
+
+#[test]
+fn express_flask_and_gin_routes_link_to_their_handlers() {
+    let (_d, v) = project(&[
+        ("package.json", r#"{"name":"a","dependencies":{"express":"4"}}"#),
+        ("web/routes.js", "const app = require('express')();\nfunction list(req, res) {}\nconst ctrl = { show(req, res) {} };\napp.get('/users', list);\napp.get('/users/:id', ctrl.show);\n"),
+        ("requirements.txt", "flask\n"),
+        ("py/views.py", "from flask import Flask\napp = Flask(__name__)\n\n@app.route('/hello')\ndef hello():\n    return 'x'\n"),
+        ("go.mod", "module example.com/m\n\nrequire github.com/gin-gonic/gin v1.9.0\n"),
+        ("srv/main.go", "package main\n\nfunc ping() {}\n\nfunc setup(r *Engine) {\n\tr.GET(\"/ping\", ping)\n}\n"),
+    ]);
+    let edges = cg_store::dump::dump_edges(&v);
+    let has = |needle: &str| edges.iter().any(|e| e.contains(needle));
+    assert!(has("web/routes.js::web/routes.js::GET:/users -references-> web/routes.js::list"), "{edges:#?}");
+    assert!(has("GET:/users/:id -references-> web/routes.js::ctrl::show"), "{edges:#?}");
+    assert!(has("py/views.py::py/views.py::GET:/hello -references-> py/views.py::hello"), "{edges:#?}");
+    assert!(has("srv/main.go::srv/main.go::GET:/ping -references-> srv/main.go::ping"), "{edges:#?}");
+}
+
+fn synth_meta(v: &View, from: &str, to: &str) -> Option<String> {
+    for f in v.files() {
+        for n in v.nodes_in_file(f) {
+            let n = cg_core::NodeIdx(n);
+            if cg_store::dump::node_label(v, n) != from {
+                continue;
+            }
+            for e in v.out_edges(n) {
+                if cg_store::dump::node_label(v, e.dst) == to {
+                    return v.edge_meta(e.eid).map(str::to_owned);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[test]
+fn synthesised_edges_for_dynamic_dispatch() {
+    let (_d, v) = project(&[
+        ("ui/App.tsx", "import { Child } from './Child';\nexport function App() {\n  return <div><Child /></div>;\n}\n"),
+        ("ui/Child.tsx", "export function Child() {\n  return <span />;\n}\n"),
+        ("ui/Comp.jsx", "import React from 'react';\nexport class Comp extends React.Component {\n  handle() {\n    this.setState({ a: 1 });\n  }\n  render() {\n    return null;\n  }\n}\n"),
+        ("bus/bus.ts", "import { EventEmitter } from 'events';\nconst bus = new EventEmitter();\nexport function onTick() {}\nbus.on('tick', onTick);\nexport function fire() {\n  bus.emit('tick');\n}\n"),
+        ("j/Shape.java", "package j;\npublic interface Shape {\n    double area();\n}\n"),
+        ("j/Circle.java", "package j;\npublic class Circle implements Shape {\n    public double area() { return 1; }\n}\n"),
+        ("go.mod", "module example.com/m\n\ngo 1.21\n"),
+        ("g/g.go", "package g\n\ntype Greeter interface {\n\tGreet() string\n\tName() string\n}\n\ntype En struct{}\n\nfunc (e *En) Greet() string { return \"hi\" }\nfunc (e *En) Name() string { return \"en\" }\n"),
+    ]);
+    let edges = cg_store::dump::dump_edges(&v);
+    let has = |needle: &str| edges.iter().any(|e| e == needle);
+    assert!(has("ui/App.tsx::App -calls-> ui/Child.tsx::Child"), "jsx-render: {edges:#?}");
+    assert_eq!(synth_meta(&v, "ui/App.tsx::App", "ui/Child.tsx::Child").unwrap().contains("jsx-render"), true);
+    assert!(has("ui/Comp.jsx::Comp::handle -calls-> ui/Comp.jsx::Comp::render"), "react-render: {edges:#?}");
+    assert!(has("bus/bus.ts::fire -calls-> bus/bus.ts::onTick"), "event-emitter: {edges:#?}");
+    assert!(synth_meta(&v, "bus/bus.ts::fire", "bus/bus.ts::onTick").unwrap().contains("\"event\":\"tick\""));
+    assert!(has("j/Shape.java::j::Shape::area -calls-> j/Circle.java::j::Circle::area"), "interface-impl: {edges:#?}");
+    assert!(has("g/g.go::En -implements-> g/g.go::Greeter"), "go-implements: {edges:#?}");
+    assert!(has("g/g.go::Greeter::Greet -calls-> g/g.go::En::Greet"), "go interface-impl: {edges:#?}");
+}

@@ -149,7 +149,7 @@ pub fn build_seg(root: &Path, opts: &IndexOptions) -> Result<Built> {
         phase.lap("tables");
         let out = pool.install(|| resolve_all(&mut engine));
         phase.lap("resolve");
-        let synth = pool.install(|| crate::synth::run_all(&engine, &out));
+        let synth = pool.install(|| crate::synth::run_all(&engine));
         phase.lap("synthesis");
         (out, synth)
     };
