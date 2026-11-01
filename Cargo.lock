@@ -261,7 +261,14 @@ name = "cg-query"
 version = "0.1.0"
 dependencies = [
  "cg-core",
+ "cg-resolve",
  "cg-store",
+ "fst",
+ "globset",
+ "rustc-hash",
+ "serde_json",
+ "smallvec",
+ "tempfile",
 ]
 
 [[package]]
@@ -346,6 +353,8 @@ dependencies = [
  "cg-store",
  "cg-sync",
  "clap",
+ "globset",
+ "libc",
  "mimalloc",
  "serde_json",
  "tracing",

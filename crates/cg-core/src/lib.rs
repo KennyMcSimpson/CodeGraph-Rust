@@ -7,6 +7,7 @@ pub mod brand;
 pub mod budget;
 pub mod config;
 pub mod error;
+pub mod fileflags;
 pub mod hash;
 pub mod ids;
 pub mod kinds;

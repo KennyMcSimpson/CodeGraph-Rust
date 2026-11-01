@@ -1,10 +1,10 @@
 //! `cgr`: CLI entry point (design doc 11.1).
 
-use anyhow::{Context, Result};
-use cg_core::brand;
-use cg_store::{dump, Store};
+mod cmds;
+
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -12,6 +12,9 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[derive(Parser)]
 #[command(name = "cgr", version, about = "codegraph-rust: fast code graph for AI agents")]
 struct Cli {
+    /// Project directory (default: the current directory; the nearest `.cgr/` above it is used)
+    #[arg(short = 'p', long = "path", global = true)]
+    project: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -21,6 +24,7 @@ enum Cmd {
     /// Create `.cgr/` and build the index
     Init {
         path: Option<PathBuf>,
+        /// Keep `.cgr/` out of git through `.git/info/exclude` instead of its own `.gitignore`
         #[arg(long)]
         local_only: bool,
     },
@@ -31,16 +35,126 @@ enum Cmd {
         force: bool,
         #[arg(long)]
         quiet: bool,
+        /// Print per-phase timings and peak memory
         #[arg(long)]
         timings: bool,
+    },
+    /// Incrementally update the index from the files that changed
+    Sync {
+        path: Option<PathBuf>,
+        #[arg(long)]
+        quiet: bool,
     },
     /// Show index statistics
     Status {
         path: Option<PathBuf>,
         #[arg(long)]
         json: bool,
+        /// Exit 1 when files changed since the last sync
+        #[arg(long)]
+        strict: bool,
+        /// Verify every partition checksum
         #[arg(long)]
         verify: bool,
+    },
+    /// Search for symbols
+    Query {
+        search: String,
+        #[arg(long)]
+        kind: Option<String>,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Explore: source, call paths and blast radius for a question or a bag of names
+    Explore {
+        #[arg(required = true, num_args = 1..)]
+        query: Vec<String>,
+        #[arg(long)]
+        max_files: Option<usize>,
+    },
+    /// Read a symbol (with trail) or a file
+    Node {
+        symbol_or_file: String,
+        /// Include the symbol's source
+        #[arg(long)]
+        code: bool,
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long)]
+        offset: Option<usize>,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        symbols_only: bool,
+    },
+    /// Indexed file tree
+    Files {
+        dir: Option<String>,
+        #[arg(long)]
+        pattern: Option<String>,
+        #[arg(long, default_value = "tree")]
+        format: String,
+        #[arg(long)]
+        no_metadata: bool,
+        #[arg(long)]
+        max_depth: Option<usize>,
+    },
+    /// Functions that call a symbol
+    Callers {
+        symbol: String,
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Functions a symbol calls
+    Callees {
+        symbol: String,
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Symbols affected by changing a symbol
+    Impact {
+        symbol: String,
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(short, long, default_value_t = 2)]
+        depth: u32,
+    },
+    /// Implementations / subtypes of an interface, abstract class or method
+    Implementations {
+        symbol: String,
+    },
+    /// Test files affected by changes to the given files
+    Affected {
+        files: Vec<String>,
+        /// Read file names from stdin, one per line
+        #[arg(long)]
+        stdin: bool,
+        #[arg(short, long, default_value_t = 5)]
+        depth: u32,
+        /// Only report files matching this glob
+        #[arg(short, long)]
+        filter: Option<String>,
+        #[arg(short = 'j', long)]
+        json: bool,
+        #[arg(short, long)]
+        quiet: bool,
+    },
+    /// Import cycles (exit 1 when any exist)
+    Cycles {
+        path: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print version information
+    Version {
+        #[arg(long)]
+        verbose: bool,
     },
     /// Development helpers
     #[command(subcommand)]
@@ -50,81 +164,51 @@ enum Cmd {
 #[derive(Subcommand)]
 enum DebugCmd {
     /// Print edges (except `contains`) as sorted lines
-    Dump { path: Option<PathBuf> },
+    Dump,
     /// Print unresolved references
-    Unresolved { path: Option<PathBuf> },
+    Unresolved,
 }
 
-fn root_of(p: &Option<PathBuf>) -> Result<PathBuf> {
-    let p = p.clone().unwrap_or_else(|| PathBuf::from("."));
-    p.canonicalize().with_context(|| format!("cannot open {}", p.display()))
-}
-
-fn open_store(root: &Path) -> Result<Store> {
-    Store::locate(root).with_context(|| format!("no {} index found from {} (run `cgr init`)", brand::DATA_DIR, root.display()))
-}
-
-fn main() -> Result<()> {
-    let cli = Cli::parse();
-    match cli.cmd {
-        Cmd::Init { path, local_only } => {
-            let root = root_of(&path)?;
-            let report = cg_resolve::index_project(&root, &Default::default())?;
-            if local_only {
-                let exclude = root.join(".git/info/exclude");
-                if exclude.parent().map_or(false, |d| d.is_dir()) {
-                    let cur = std::fs::read_to_string(&exclude).unwrap_or_default();
-                    if !cur.lines().any(|l| l.trim() == ".cgr/") {
-                        std::fs::write(&exclude, format!("{cur}{}.cgr/\n", if cur.ends_with('\n') || cur.is_empty() { "" } else { "\n" }))?;
-                    }
-                }
-            }
-            println!("indexed {} files, {} nodes, {} edges in {:.2}s", report.files, report.nodes, report.edges, report.total().as_secs_f64());
-        }
-        Cmd::Index { path, quiet, timings, .. } => {
-            let root = root_of(&path)?;
-            let report = cg_resolve::index_project(&root, &Default::default())?;
-            if !quiet {
-                println!(
-                    "indexed {} files ({} unsupported, {} too large), {} nodes, {} edges, {}/{} references resolved",
-                    report.files, report.unsupported_files, report.too_large_files, report.nodes, report.edges, report.resolved_refs, report.refs
-                );
-            }
-            if timings || std::env::var(brand::env::TIMINGS).is_ok() {
-                print!("{}", report.render_timings());
-            }
-        }
-        Cmd::Status { path, json, verify } => {
-            let root = root_of(&path)?;
-            let store = open_store(&root)?;
-            let snap = store.open_snapshot()?;
-            if verify {
-                snap.view.base.verify()?;
-            }
-            let m = &snap.manifest;
-            if json {
-                println!("{}", serde_json::to_string_pretty(m)?);
-            } else {
-                println!("files {}  nodes {}  edges {}  generation {}", m.n_files, m.n_nodes, m.n_edges, m.generation);
-                for (name, n) in dump::ref_stats(&snap.view) {
-                    println!("  refs {name:<12} {n}");
-                }
-            }
-        }
-        Cmd::Debug(DebugCmd::Dump { path }) => {
-            let root = root_of(&path)?;
-            let snap = open_store(&root)?.open_snapshot()?;
-            for l in dump::dump_edges(&snap.view) {
-                println!("{l}");
-            }
-        }
-        Cmd::Debug(DebugCmd::Unresolved { path }) => {
-            let root = root_of(&path)?;
-            let snap = open_store(&root)?.open_snapshot()?;
-            for l in dump::dump_unresolved(&snap.view) {
-                println!("{l}");
-            }
-        }
+/// Restore the default SIGPIPE action so `cgr ... | head` ends quietly instead of panicking.
+fn reset_sigpipe() {
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
-    Ok(())
+}
+
+fn main() {
+    reset_sigpipe();
+    let cli = Cli::parse();
+    let code = match run(cli) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("error: {e:#}");
+            1
+        }
+    };
+    std::process::exit(code);
+}
+
+fn run(cli: Cli) -> Result<i32> {
+    let base = cli.project;
+    match cli.cmd {
+        Cmd::Init { path, local_only } => cmds::init(path.or(base), local_only),
+        Cmd::Index { path, force, quiet, timings } => cmds::index(path.or(base), force, quiet, timings),
+        Cmd::Sync { path, quiet } => cmds::sync(path.or(base), quiet),
+        Cmd::Status { path, json, strict, verify } => cmds::status(path.or(base), json, strict, verify),
+        Cmd::Query { search, kind, limit, json } => cmds::query(base, &search, kind, limit, json),
+        Cmd::Explore { query, max_files } => cmds::explore(base, &query.join(" "), max_files),
+        Cmd::Node { symbol_or_file, code, file, offset, limit, symbols_only } => cmds::node(base, &symbol_or_file, code, file, offset, limit, symbols_only),
+        Cmd::Files { dir, pattern, format, no_metadata, max_depth } => cmds::files(base, dir, pattern, &format, !no_metadata, max_depth),
+        Cmd::Callers { symbol, file, limit } => cmds::callers(base, &symbol, file, limit, true),
+        Cmd::Callees { symbol, file, limit } => cmds::callers(base, &symbol, file, limit, false),
+        Cmd::Impact { symbol, file, depth } => cmds::impact(base, &symbol, file, depth),
+        Cmd::Implementations { symbol } => cmds::implementations(base, &symbol),
+        Cmd::Affected { files, stdin, depth, filter, json, quiet } => cmds::affected(base, files, stdin, depth, filter, json, quiet),
+        Cmd::Cycles { path, json } => cmds::cycles(path.or(base), json),
+        Cmd::Version { verbose } => cmds::version(verbose),
+        Cmd::Debug(DebugCmd::Dump) => cmds::debug_dump(base),
+        Cmd::Debug(DebugCmd::Unresolved) => cmds::debug_unresolved(base),
+    }
 }

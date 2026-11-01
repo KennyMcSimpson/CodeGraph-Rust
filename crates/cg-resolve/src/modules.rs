@@ -273,7 +273,11 @@ impl<'v> Modules<'v> {
             if from_lang.family() == LangFamily::Js && !from_lang.is_typescript() && *e == ".d.ts" {
                 continue;
             }
-            let cand = format!("{base}{e}");
+            // the project root itself is the empty path: `require('..')` -> `index.js`
+            let cand = if base.is_empty() { e.trim_start_matches('/').to_owned() } else { format!("{base}{e}") };
+            if cand.is_empty() || cand.starts_with('.') {
+                continue;
+            }
             if let Some(f) = self.path_to_file.get(cand.as_str()) {
                 return Some(*f);
             }

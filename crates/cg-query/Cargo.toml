@@ -1,8 +1,19 @@
 [package]
 name = "cg-query"
+description = "Search, graph traversal and the explore pipeline over a codegraph-rust snapshot"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
 [dependencies]
 cg-core = { workspace = true }
 cg-store = { workspace = true }
+fst = { workspace = true }
+rustc-hash = { workspace = true }
+globset = { workspace = true }
+serde_json = { workspace = true }
+smallvec = { workspace = true }
+
+[dev-dependencies]
+cg-resolve = { workspace = true }
+tempfile = { workspace = true }
