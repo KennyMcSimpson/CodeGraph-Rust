@@ -41,6 +41,10 @@ fn walk(cx: &mut Cx, n: Node, scope: u32) {
         "function_expression" | "function" | "generator_function" | "arrow_function" | "method_definition" => function(cx, n, scope),
         "class_declaration" | "abstract_class_declaration" | "class" => class(cx, n, scope),
         "lexical_declaration" | "variable_declaration" => var_decl(cx, n, scope),
+        "call_expression" => {
+            super::args::js_call(cx, n);
+            walk_children(cx, n, scope);
+        }
         "for_in_statement" => {
             if let Some(l) = n.child_by_field_name("left") {
                 bind_pattern(cx, l, scope, BindKind::Local, "", "");
@@ -99,6 +103,8 @@ fn ts_type_name(cx: &Cx, n: Node) -> String {
     match n.kind() {
         "type_annotation" => n.named_child(0).map(|c| ts_type_name(cx, c)).unwrap_or_default(),
         "type_identifier" | "identifier" => cx.text(n).to_owned(),
+        // primitives type arguments for overload selection (`args`); `any` / `unknown` say nothing
+        "predefined_type" if matches!(cx.text(n), "string" | "number" | "boolean" | "bigint" | "symbol") => cx.text(n).to_owned(),
         "nested_type_identifier" | "member_expression" => cx.text(n).to_owned(),
         "generic_type" => n.child_by_field_name("name").map(|c| ts_type_name(cx, c)).unwrap_or_default(),
         "parenthesized_type" | "readonly_type" | "required_parameter" => n.named_child(0).map(|c| ts_type_name(cx, c)).unwrap_or_default(),
@@ -108,7 +114,7 @@ fn ts_type_name(cx: &Cx, n: Node) -> String {
                     continue;
                 }
                 let t = ts_type_name(cx, ch);
-                if !t.is_empty() && t != "null" && t != "undefined" {
+                if !t.is_empty() && !matches!(t.as_str(), "null" | "undefined" | "string" | "number" | "boolean" | "bigint" | "symbol") {
                     return t;
                 }
             }

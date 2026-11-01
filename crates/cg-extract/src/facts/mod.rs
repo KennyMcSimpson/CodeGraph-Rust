@@ -6,6 +6,7 @@ use crate::rows::FileRows;
 use cg_core::{text, Lang, NONE};
 use tree_sitter::{Node, Tree};
 
+pub mod args;
 mod go;
 mod java;
 mod js;
@@ -140,6 +141,11 @@ pub struct Facts {
     /// Precise call paths lost by the compatibility kernel. Applied to matching
     /// call references before storage; node identities and sites stay unchanged.
     pub call_names: Vec<CallNameFact>,
+    /// Argument shapes of call sites, for overload selection (see `args`).
+    pub call_args: Vec<CallArgsFact>,
+    /// Go type declarations whose names stand for other types: true aliases and the type
+    /// parameters of generic types (structural interface matching leaves them open).
+    pub go_types: Vec<GoTypeFact>,
     /// A supplementary parse exhausted its deadline. The pipeline exposes this
     /// as an incomplete file rather than silently advertising complete facts.
     pub timed_out: bool,
@@ -152,6 +158,25 @@ pub struct CallNameFact {
     pub tail: String,
     pub kernel_name: String,
     pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoTypeFact {
+    pub name: String,
+    /// `type A = B`
+    pub alias: bool,
+    pub type_params: Vec<String>,
+}
+
+/// The arguments of one call, keyed like the kernel's call reference: its position and the
+/// called name's last segment. Stored with the reference (`args::ARGS_MARK` list).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CallArgsFact {
+    pub line: u32,
+    pub col: u32,
+    pub tail: String,
+    /// One shape per argument, in order (see `args`).
+    pub args: Vec<String>,
 }
 
 impl Facts {

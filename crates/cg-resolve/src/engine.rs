@@ -275,10 +275,21 @@ impl<'v> Engine<'v> {
             if p.is_none() {
                 continue;
             }
+            let jvm = view.file(f).lang().family() == LangFamily::Jvm;
             for n in self.top_level_nodes(f) {
                 let node = view.node(n);
                 // Go methods are not package-level names; Java/Kotlin nest members under classes
                 if node.kind() == NodeKind::Method {
+                    continue;
+                }
+                // a Java / Kotlin file's declarations sit inside its `package` namespace node
+                if jvm && node.kind() == NodeKind::Namespace {
+                    for e in view.out_edges(n).filter(|e| e.kind == EdgeKind::Contains) {
+                        let child = view.node(e.dst);
+                        if child.kind().is_definition() && child.kind() != NodeKind::Method {
+                            defs[p.0 as usize].entry(child.name()).or_default().push(e.dst);
+                        }
+                    }
                     continue;
                 }
                 defs[p.0 as usize].entry(node.name()).or_default().push(n);
@@ -502,6 +513,27 @@ impl<'v> Engine<'v> {
             }
         }
         None
+    }
+
+    /// Every callable member called `name` declared in the body of `t` or of one of its
+    /// ancestors, nearest type first and in declaration order: the overload set a call picks
+    /// from. Members declared outside a body (Go receivers, Rust impls) have no overloads.
+    pub fn member_overloads(&self, t: NodeIdx, name: &str) -> SmallVec<[NodeIdx; 4]> {
+        let mut out = SmallVec::new();
+        for ty in std::iter::once(t).chain(self.ancestors(t)) {
+            for e in self.view.out_edges(ty) {
+                if e.kind == EdgeKind::Contains {
+                    let c = self.view.node(e.dst);
+                    if c.name() == name && c.kind().is_callable() && !out.contains(&e.dst) {
+                        out.push(e.dst);
+                    }
+                }
+            }
+            if out.len() > 32 {
+                break;
+            }
+        }
+        out
     }
 
     /// Go: promoted members through embedded structs are covered by `ancestors`

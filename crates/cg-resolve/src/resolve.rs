@@ -6,6 +6,7 @@
 use crate::builtins::{is_builtin, is_common_method};
 use crate::engine::{Bound, Engine};
 use crate::modules::{ImportTarget, PkgId};
+use crate::overload::{self, ArgTy, CallArgs};
 use crate::shape::{parse_shape, split_head, Shape};
 use cg_core::{text::pack_pos, EdgeKind, FileId, Lang, LangFamily, NodeIdx, NodeKind, RefKind, Visibility, NONE};
 use cg_extract::facts::COMMONJS_MODULE;
@@ -841,6 +842,169 @@ impl<'e, 'v> FileCx<'e, 'v> {
         result
     }
 
+    // ------------------------------------------------------- overload selection
+    /// What each argument of the call `r` is, from its shape and the bindings in scope.
+    fn arg_types(&self, wcx: &mut WorkerCx<'e, 'v>, args: &CallArgs<'v>, r: &RefRec) -> SmallVec<[ArgTy; 6]> {
+        let scope = self.scope_at(r.line, r.col);
+        args.shapes.iter().map(|s| self.arg_type(wcx, s, scope, r)).collect()
+    }
+
+    fn named_arg(&self, wcx: &mut WorkerCx<'e, 'v>, written: &str) -> ArgTy {
+        let simple = overload::simplify_type(written);
+        if simple.is_empty() {
+            return ArgTy::Unknown;
+        }
+        let node = if overload::is_value_type(&simple) || simple.ends_with("[]") {
+            None
+        } else {
+            match self.lookup_type(wcx, written) {
+                TypeRes::Node(n) => Some(n),
+                _ => None,
+            }
+        };
+        ArgTy::Named(simple, node)
+    }
+
+    fn node_arg(&self, t: NodeIdx) -> ArgTy {
+        ArgTy::Named(self.view.node(t).name().to_owned(), Some(t))
+    }
+
+    fn arg_type(&self, wcx: &mut WorkerCx<'e, 'v>, shape: &str, scope: u32, r: &RefRec) -> ArgTy {
+        match shape {
+            "?" => ArgTy::Unknown,
+            "N" => ArgTy::Null,
+            "L" => ArgTy::Lambda(None),
+            "#this" => self.enclosing_type(r.from).map_or(ArgTy::Unknown, |t| self.node_arg(t)),
+            _ => {
+                if let Some(t) = shape.strip_prefix("T:") {
+                    return self.named_arg(wcx, t);
+                }
+                if let Some(v) = shape.strip_prefix("V:") {
+                    if let Some(b) = self.lookup_binding(v, scope, r.line, false) {
+                        if b.kind == BindKind::LocalFn as u8 {
+                            return ArgTy::Lambda(None);
+                        }
+                        let dt = self.view.text_str(b.decl_type);
+                        if !dt.is_empty() {
+                            return self.named_arg(wcx, dt);
+                        }
+                        return self.binding_type(wcx, b).map_or(ArgTy::Unknown, |t| self.node_arg(t));
+                    }
+                    // a bare field: Java / Kotlin only (JS reads fields through `this.`)
+                    return if self.family == LangFamily::Jvm { self.field_arg(wcx, r, v) } else { ArgTy::Unknown };
+                }
+                if let Some(f) = shape.strip_prefix("F:") {
+                    return self.field_arg(wcx, r, f);
+                }
+                match shape.strip_prefix('L').map(str::parse::<u8>) {
+                    Some(Ok(k)) => ArgTy::Lambda(Some(k)),
+                    _ => ArgTy::Unknown,
+                }
+            }
+        }
+    }
+
+    /// Field `name` of the type enclosing the reference, by its declared type (primitives too).
+    fn field_arg(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, name: &str) -> ArgTy {
+        let Some(t) = self.enclosing_type(r.from) else { return ArgTy::Unknown };
+        for ty in std::iter::once(t).chain(self.e.ancestors(t)) {
+            let cx = wcx.file_cx(self.e, self.view.hot(ty).file);
+            let Some(cs) = cx.class_scope_for(ty) else { continue };
+            let Some(b) = cx.bindings.get(&(cs, name)).and_then(|l| l.iter().copied().find(|b| b.kind == BindKind::Field as u8)) else { continue };
+            let dt = self.view.text_str(b.decl_type);
+            if !dt.is_empty() {
+                return cx.named_arg(wcx, dt);
+            }
+            return cx.binding_type(wcx, b).map_or(ArgTy::Unknown, |n| cx.node_arg(n));
+        }
+        ArgTy::Unknown
+    }
+
+    /// The overload of `cands` (same name, preference order) the call's arguments reach:
+    /// by count first, then by type. `None` when nothing is known or nothing fits.
+    fn pick_overload(&self, wcx: &mut WorkerCx<'e, 'v>, cands: &[NodeIdx], args: &CallArgs<'v>, r: &RefRec) -> Option<NodeIdx> {
+        if cands.len() < 2 {
+            return None;
+        }
+        let view = self.view;
+        let n = args.shapes.len();
+        let lang_of = |c: NodeIdx| view.file(view.hot(c).file).lang();
+        // arity settles most sets without typing a single argument
+        let by_count: SmallVec<[NodeIdx; 4]> =
+            cands.iter().copied().filter(|c| overload::takes(lang_of(*c), view.node(*c).signature(), n) != Some(false)).collect();
+        match by_count.len() {
+            0 => return None,
+            1 => return Some(by_count[0]),
+            _ => {}
+        }
+        let types = self.arg_types(wcx, args, r);
+        let mut sigs = Vec::with_capacity(by_count.len());
+        let mut tparams: Vec<SmallVec<[&str; 2]>> = Vec::with_capacity(by_count.len());
+        let mut param_nodes: Vec<FxHashMap<String, Option<NodeIdx>>> = Vec::with_capacity(by_count.len());
+        for &c in &by_count {
+            let node = view.node(c);
+            let params = node.signature().and_then(|s| overload::parse_params(lang_of(c), s));
+            let mut map = FxHashMap::default();
+            if let Some(p) = &params {
+                let cx = wcx.file_cx(self.e, node.file());
+                for item in &p.items {
+                    let base = item.ty.trim_end_matches("[]");
+                    if base.is_empty() || map.contains_key(&item.ty) || overload::is_value_type(base) || !base.starts_with(|ch: char| ch.is_ascii_uppercase()) {
+                        continue;
+                    }
+                    let t = match cx.lookup_type(wcx, base) {
+                        TypeRes::Node(t) => Some(t),
+                        _ => None,
+                    };
+                    map.insert(item.ty.clone(), t);
+                }
+            }
+            sigs.push(params);
+            tparams.push(node.type_params().into_iter().filter_map(|t| t.split(|c: char| !(c.is_alphanumeric() || c == '_')).next()).collect());
+            param_nodes.push(map);
+        }
+        let e = self.e;
+        let relate = |i: usize, a: &ArgTy, pt: &str| -> Option<bool> {
+            let p = (*param_nodes[i].get(pt)?)?;
+            match a {
+                ArgTy::Named(_, Some(at)) => Some(*at == p || e.ancestors(*at).contains(&p)),
+                ArgTy::Named(name, None) => overload::is_value_type(name).then_some(false),
+                ArgTy::Lambda(_) => {
+                    (!matches!(view.node(p).kind(), NodeKind::Interface | NodeKind::Trait | NodeKind::Protocol | NodeKind::TypeAlias)).then_some(false)
+                }
+                _ => None,
+            }
+        };
+        overload::choose(self.family, &sigs, &types, &tparams, &relate).map(|i| by_count[i])
+    }
+
+    /// The overload of member `name` of `t` (or its ancestors) a call reaches, when the type
+    /// declares several.
+    fn overloaded_member(&self, wcx: &mut WorkerCx<'e, 'v>, t: NodeIdx, name: &str, args: Option<&CallArgs<'v>>, r: &RefRec) -> Option<NodeIdx> {
+        let args = args?;
+        if !matches!(self.family, LangFamily::Jvm | LangFamily::Js) {
+            return None;
+        }
+        let cands = self.e.member_overloads(t, name);
+        self.pick_overload(wcx, &cands, args, r)
+    }
+
+    /// Same-named siblings of `pick` in its file (functions declared several times).
+    fn sibling_overloads(&self, pick: NodeIdx) -> SmallVec<[NodeIdx; 4]> {
+        let view = self.view;
+        let h = view.hot(pick);
+        let name = view.name_str(h.name);
+        let mut out: SmallVec<[NodeIdx; 4]> = view
+            .by_name(name)
+            .filter(|c| {
+                let ch = view.hot(*c);
+                ch.file == h.file && ch.parent == h.parent && view.node(*c).kind().is_callable()
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
     // ------------------------------------------------------------ name lookup
     fn visible(&self, cand: NodeIdx, name: &str) -> bool {
         let h = self.view.hot(cand);
@@ -887,7 +1051,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
     }
 
     /// Name match over the whole project (design doc 6.5).
-    fn global_match(&self, name: &str, accept: Accept, bare_callable: bool) -> NameRes {
+    fn global_match(&self, wcx: &mut WorkerCx<'e, 'v>, name: &str, accept: Accept, bare_callable: bool, args: Option<(&CallArgs<'v>, &RefRec)>) -> NameRes {
         let mut best: SmallVec<[NodeIdx; 4]> = SmallVec::new();
         let mut best_score = 0u32;
         let mut seen = 0usize;
@@ -934,10 +1098,12 @@ impl<'e, 'v> FileCx<'e, 'v> {
                 NameRes::Found(best[0], by_, conf)
             }
             k => {
-                // overloads under one parent: the first declaration wins
+                // overloads under one parent: the arguments pick one, else the first declared
                 let p0 = self.view.hot(best[0]).parent;
                 if best.iter().all(|c| self.view.hot(*c).parent == p0 && self.view.node(*c).file() == self.view.node(best[0]).file()) {
-                    return NameRes::Found(best[0], by::PACKAGE, 80);
+                    best.sort();
+                    let pick = args.and_then(|(a, r)| self.pick_overload(wcx, &best, a, r)).unwrap_or(best[0]);
+                    return NameRes::Found(pick, by::PACKAGE, 80);
                 }
                 NameRes::Ambiguous(k as u32)
             }
@@ -945,9 +1111,14 @@ impl<'e, 'v> FileCx<'e, 'v> {
     }
 
     /// Member `name` of the type enclosing `from` (and of its outer types for Java / Kotlin).
-    fn enclosing_member(&self, from: Option<NodeIdx>, name: &str) -> Option<NodeIdx> {
+    fn enclosing_member(&self, wcx: &mut WorkerCx<'e, 'v>, from: Option<NodeIdx>, name: &str, args: Option<(&CallArgs<'v>, &RefRec)>) -> Option<NodeIdx> {
         let view = self.view;
         let t = self.enclosing_type(from?)?;
+        if let Some((a, r)) = args {
+            if let Some(m) = self.overloaded_member(wcx, t, name, Some(a), r) {
+                return Some(m);
+            }
+        }
         if let Some(m) = self.e.find_member(t, name) {
             return Some(m);
         }
@@ -972,13 +1143,29 @@ impl<'e, 'v> FileCx<'e, 'v> {
     #[allow(clippy::too_many_arguments)]
     pub fn resolve_name(
         &self,
-        _wcx: &mut WorkerCx<'e, 'v>,
+        wcx: &mut WorkerCx<'e, 'v>,
         name: &str,
         accept: Accept,
         scope: u32,
         line: u32,
         from: Option<NodeIdx>,
         allow_global: bool,
+    ) -> NameRes {
+        self.resolve_name_args(wcx, name, accept, scope, line, from, allow_global, None)
+    }
+
+    /// [`Self::resolve_name`] for a call whose arguments may pick among overloads.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_name_args(
+        &self,
+        wcx: &mut WorkerCx<'e, 'v>,
+        name: &str,
+        accept: Accept,
+        scope: u32,
+        line: u32,
+        from: Option<NodeIdx>,
+        allow_global: bool,
+        args: Option<(&CallArgs<'v>, &RefRec)>,
     ) -> NameRes {
         let view = self.view;
         let e = self.e;
@@ -999,7 +1186,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
             }
             // members of the enclosing class are visible by bare name in these languages
             if matches!(self.family, LangFamily::Jvm | LangFamily::Python) {
-                if let Some(m) = self.enclosing_member(from, name) {
+                if let Some(m) = self.enclosing_member(wcx, from, name, args) {
                     return NameRes::Found(m, by::RECEIVER, 90);
                 }
             }
@@ -1036,7 +1223,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
         }
         // JS / TS: `this.method()` is emitted as a bare `method`; an explicit import wins over it
         if accept != Accept::Type && self.family == LangFamily::Js {
-            if let Some(m) = self.enclosing_member(from, name) {
+            if let Some(m) = self.enclosing_member(wcx, from, name, args) {
                 return NameRes::Found(m, by::RECEIVER, 88);
             }
         }
@@ -1055,8 +1242,14 @@ impl<'e, 'v> FileCx<'e, 'v> {
             same.push(cand);
         }
         if !same.is_empty() {
-            // prefer top-level definitions, then the first declared
-            let pick = same.iter().copied().find(|n| view.node(*n).parent().is_some_and(|p| kind_of(view, p) == NodeKind::File)).unwrap_or(same[0]);
+            // prefer top-level definitions, then the first declared; overloads by the arguments
+            let mut pick = same.iter().copied().find(|n| view.node(*n).parent().is_some_and(|p| kind_of(view, p) == NodeKind::File)).unwrap_or(same[0]);
+            if let Some((a, r)) = args.filter(|_| same.len() > 1 && matches!(self.family, LangFamily::Jvm | LangFamily::Js)) {
+                let set = self.sibling_overloads(pick);
+                if let Some(m) = self.pick_overload(wcx, &set, a, r) {
+                    pick = m;
+                }
+            }
             return NameRes::Found(pick, by::LEXICAL, 92);
         }
         // 5. same package / module
@@ -1106,17 +1299,35 @@ impl<'e, 'v> FileCx<'e, 'v> {
             return NameRes::Builtin;
         }
         if allow_global {
-            return self.global_match(name, accept, bare_callable);
+            return self.global_match(wcx, name, accept, bare_callable, args);
         }
         NameRes::NotFound
     }
 
     // ------------------------------------------------------------ call forms
-    fn member_of(&self, wcx: &mut WorkerCx<'e, 'v>, mut t: NodeIdx, path: &[&str], method: &str, conf: u8) -> Outcome {
+    fn member_of(&self, wcx: &mut WorkerCx<'e, 'v>, t: NodeIdx, path: &[&str], method: &str, conf: u8) -> Outcome {
+        self.member_call(wcx, t, path, method, conf, None)
+    }
+
+    /// `member_of` for a call: its arguments pick among overloads of the final member.
+    fn member_call(
+        &self,
+        wcx: &mut WorkerCx<'e, 'v>,
+        mut t: NodeIdx,
+        path: &[&str],
+        method: &str,
+        conf: u8,
+        args: Option<(&CallArgs<'v>, &RefRec)>,
+    ) -> Outcome {
         for f in path {
             match self.field_type(wcx, t, f) {
                 Some(ft) => t = ft,
                 None => return Outcome::st(status::NO_CANDIDATE),
+            }
+        }
+        if let Some((a, r)) = args {
+            if let Some(m) = self.overloaded_member(wcx, t, method, Some(a), r) {
+                return Outcome::found(m, by::RECEIVER, conf);
             }
         }
         match self.e.find_member(t, method) {
@@ -1198,9 +1409,9 @@ impl<'e, 'v> FileCx<'e, 'v> {
         }
     }
 
-    fn call_bare(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, name: &str, accept: Accept) -> Outcome {
+    fn call_bare(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, name: &str, accept: Accept, args: Option<&CallArgs<'v>>) -> Outcome {
         let scope = self.scope_at(r.line, r.col);
-        match self.resolve_name(wcx, name, accept, scope, r.line, Some(r.from), true) {
+        match self.resolve_name_args(wcx, name, accept, scope, r.line, Some(r.from), true, args.map(|a| (a, r))) {
             NameRes::Found(n, b, c) => Outcome::found(n, b, c),
             NameRes::Local => Outcome::st(status::LOCAL_BINDING),
             NameRes::External | NameRes::Module(_) | NameRes::Pkg(_) => Outcome::st(status::EXTERNAL),
@@ -1210,15 +1421,16 @@ impl<'e, 'v> FileCx<'e, 'v> {
         }
     }
 
-    fn call_member(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, root: &str, path: &[&str], method: &str) -> Outcome {
+    fn call_member(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, root: &str, path: &[&str], method: &str, args: Option<&CallArgs<'v>>) -> Outcome {
         let scope = self.scope_at(r.line, r.col);
         let view = self.view;
+        let call = args.map(|a| (a, r));
         // (a) a local variable, parameter or field
         if let Some(b) = self.lookup_binding(root, scope, r.line, false) {
             if b.kind != BindKind::LocalFn as u8 {
                 return match self.binding_value(wcx, b, 0) {
                     Some(t) if t.method_receiver(method).is_some() => {
-                        let o = self.member_of(wcx, t.node, path, method, 90);
+                        let o = self.member_call(wcx, t.node, path, method, 90, call);
                         if o.status == status::RESOLVED {
                             o
                         } else {
@@ -1249,6 +1461,13 @@ impl<'e, 'v> FileCx<'e, 'v> {
                 };
             }
         }
+        // (a2) Java / Kotlin: a field of the enclosing type or an outer one, `this.` implied
+        // (the kernel writes `this.repo.find()` as `repo.find`)
+        if self.family == LangFamily::Jvm {
+            if let Some(o) = self.call_on_field(wcx, r, root, path, method, call) {
+                return o;
+            }
+        }
         // (b) imported root
         if let Some(i) = self.visible_import(root, scope) {
             match self.e.bind_import(self.file, i as usize) {
@@ -1266,7 +1485,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
                 Bound::Node(n) => {
                     let k = kind_of(view, n);
                     if k.is_type() {
-                        return self.member_of(wcx, n, path, method, 92);
+                        return self.member_call(wcx, n, path, method, 92, call);
                     }
                     // an imported module-level variable: the type of its initialiser
                     {
@@ -1312,7 +1531,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
         match self.lookup_type(wcx, root) {
             TypeRes::Node(t) => {
                 if view.node(t).kind().is_type() {
-                    return self.member_of(wcx, t, path, method, 90);
+                    return self.member_call(wcx, t, path, method, 90, call);
                 }
             }
             TypeRes::External => return Outcome::st(status::EXTERNAL),
@@ -1330,12 +1549,52 @@ impl<'e, 'v> FileCx<'e, 'v> {
         }
     }
 
-    fn call_this(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, kw: &str, fields: &[&str], method: &str) -> Outcome {
+    /// A call on field `root` of the type enclosing `r` (or of an outer type). `None` when no
+    /// such field is declared; a field whose declared type is outside the project ends here.
+    fn call_on_field(
+        &self,
+        wcx: &mut WorkerCx<'e, 'v>,
+        r: &RefRec,
+        root: &str,
+        path: &[&str],
+        method: &str,
+        call: Option<(&CallArgs<'v>, &RefRec)>,
+    ) -> Option<Outcome> {
+        let view = self.view;
+        let mut t = self.enclosing_type(r.from);
+        for _ in 0..8 {
+            let ty = t?;
+            if let Some(ft) = self.field_type(wcx, ty, root) {
+                let o = self.member_call(wcx, ft, path, method, 90, call);
+                return Some(if o.status == status::RESOLVED { o } else { Outcome::st(status::NO_CANDIDATE) });
+            }
+            if let Some(declared) = self.field_decl_type(wcx, ty, root) {
+                // declared, not a project type: nothing in the project is its member
+                return (!declared.is_empty()).then(|| Outcome::st(status::EXTERNAL));
+            }
+            t = view.node(ty).parent().filter(|p| kind_of(view, *p).is_type());
+        }
+        None
+    }
+
+    /// Declared type text of field `name` of `t` or an ancestor (`Some("")`: untyped).
+    fn field_decl_type(&self, wcx: &mut WorkerCx<'e, 'v>, t: NodeIdx, name: &str) -> Option<String> {
+        for ty in std::iter::once(t).chain(self.e.ancestors(t)) {
+            let cx = wcx.file_cx(self.e, self.view.hot(ty).file);
+            let Some(cs) = cx.class_scope_for(ty) else { continue };
+            if let Some(b) = cx.bindings.get(&(cs, name)).and_then(|l| l.iter().copied().find(|b| b.kind == BindKind::Field as u8)) {
+                return Some(self.view.text_str(b.decl_type).to_owned());
+            }
+        }
+        None
+    }
+
+    fn call_this(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, kw: &str, fields: &[&str], method: &str, args: Option<&CallArgs<'v>>) -> Outcome {
         let Some(t) = self.enclosing_type(r.from) else {
             return if fields.is_empty() { self.fallback_method(method) } else { Outcome::st(status::NO_CANDIDATE) };
         };
         let _ = kw;
-        let o = self.member_of(wcx, t, fields, method, 95);
+        let o = self.member_call(wcx, t, fields, method, 95, args.map(|a| (a, r)));
         if o.status == status::RESOLVED {
             return o;
         }
@@ -1359,24 +1618,26 @@ impl<'e, 'v> FileCx<'e, 'v> {
         Outcome::st(status::NO_CANDIDATE)
     }
 
-    fn call_super(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, method: &str) -> Outcome {
-        let _ = wcx;
+    fn call_super(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, method: &str, args: Option<&CallArgs<'v>>) -> Outcome {
         let Some(t) = self.enclosing_type(r.from) else { return Outcome::st(status::NO_CANDIDATE) };
         for a in self.e.ancestors(t) {
             if let Some(m) = self.e.direct_member(a, method) {
-                return Outcome::found(m, by::RECEIVER, 90);
+                // the overloads the nearest declaring supertype sees, its own and inherited
+                let pick = self.overloaded_member(wcx, a, method, args, r).unwrap_or(m);
+                return Outcome::found(pick, by::RECEIVER, 90);
             }
         }
         Outcome::st(status::NO_CANDIDATE)
     }
 
-    fn call_result(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, inner: &str, method: &str) -> Outcome {
+    fn call_result(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, inner: &str, method: &str, args: Option<&CallArgs<'v>>) -> Outcome {
         // type produced by calling `inner`
         let value = match self.call_value(wcx, inner, self.scope_at(r.line, r.col), r.line, 0) {
             Some(value) => Some(value),
             None => {
-                // `inner` may be a method of a typed receiver: resolve it as a call first
-                let o = self.resolve_call_name(wcx, r, inner);
+                // `inner` may be a method of a typed receiver: resolve it as a call first (its
+                // own arguments are not this reference's)
+                let o = self.call_name_with(wcx, r, inner, None);
                 if o.status != status::RESOLVED {
                     return Outcome::st(status::NO_CANDIDATE);
                 }
@@ -1385,25 +1646,30 @@ impl<'e, 'v> FileCx<'e, 'v> {
             }
         };
         let Some(t) = value.and_then(|v| v.method_receiver(method)) else { return Outcome::st(status::NO_CANDIDATE) };
-        self.member_of(wcx, t, &[], method, 85)
+        self.member_call(wcx, t, &[], method, 85, args.map(|a| (a, r)))
     }
 
     pub fn resolve_call_name(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, name: &str) -> Outcome {
+        let args = CallArgs::of(self.view, r);
+        self.call_name_with(wcx, r, name, args.as_ref())
+    }
+
+    fn call_name_with(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, name: &str, args: Option<&CallArgs<'v>>) -> Outcome {
         match parse_shape(name) {
-            Shape::Bare(n) => self.call_bare(wcx, r, n, Accept::Callable),
-            Shape::Member { root, path, method } => self.call_member(wcx, r, root, &path, method),
-            Shape::This { kw, fields, method } => self.call_this(wcx, r, kw, &fields, method),
-            Shape::Super { method } => self.call_super(wcx, r, method),
+            Shape::Bare(n) => self.call_bare(wcx, r, n, Accept::Callable, args),
+            Shape::Member { root, path, method } => self.call_member(wcx, r, root, &path, method, args),
+            Shape::This { kw, fields, method } => self.call_this(wcx, r, kw, &fields, method, args),
+            Shape::Super { method } => self.call_super(wcx, r, method, args),
             Shape::New { class, method } => match self.lookup_type(wcx, class) {
-                TypeRes::Node(t) => self.member_of(wcx, t, &[], method, 90),
+                TypeRes::Node(t) => self.member_call(wcx, t, &[], method, 90, args.map(|a| (a, r))),
                 TypeRes::External => Outcome::st(status::EXTERNAL),
                 _ => Outcome::st(status::NO_CANDIDATE),
             },
-            Shape::CallResult { inner, method } => self.call_result(wcx, r, inner, method),
+            Shape::CallResult { inner, method } => self.call_result(wcx, r, inner, method, args),
             Shape::ValueResult { inner, method } => {
                 let value = self.expression_value(wcx, inner, self.scope_at(r.line, r.col), r.line, 0);
                 match value.and_then(|v| v.method_receiver(method)) {
-                    Some(t) => self.member_of(wcx, t, &[], method, 85),
+                    Some(t) => self.member_call(wcx, t, &[], method, 85, args.map(|a| (a, r))),
                     None => Outcome::st(status::NO_CANDIDATE),
                 }
             }
@@ -1445,6 +1711,31 @@ impl<'e, 'v> FileCx<'e, 'v> {
             NameRes::Ambiguous(k) => Outcome::ambiguous(k),
             NameRes::NotFound => Outcome::st(status::NO_CANDIDATE),
         }
+    }
+
+    /// Framework rule for a route's handler that no scope or import names: the method the
+    /// route decorates (`@Get() list()`, `@GetMapping get()`), declared right after the
+    /// decorator in the route's file. A bare method name is invisible to lexical lookup, but a
+    /// decorator route sits on the method it routes to.
+    fn route_handler(&self, r: &RefRec, name: &str, kind: RefKind) -> Option<Outcome> {
+        let view = self.view;
+        if kind_of(view, r.from) != NodeKind::Route || !matches!(kind, RefKind::FunctionRef | RefKind::Edge(EdgeKind::Calls | EdgeKind::References)) {
+            return None;
+        }
+        let Shape::Bare(name) = parse_shape(name) else { return None };
+        let mut after: Option<(u32, NodeIdx)> = None;
+        for c in view.by_name(name) {
+            let h = view.hot(c);
+            let k = NodeKind::from_u8(h.kind).unwrap_or(NodeKind::Variable);
+            // stacked decorators and annotations sit between the route and its method
+            if h.file != self.file || !matches!(k, NodeKind::Method | NodeKind::Function) || h.start_line < r.line || h.start_line > r.line + 12 {
+                continue;
+            }
+            if after.is_none_or(|(l, n)| (h.start_line, c) < (l, n)) {
+                after = Some((h.start_line, c));
+            }
+        }
+        Some(Outcome::found(after?.1, by::FRAMEWORK, 92))
     }
 
     fn file_node(&self, f: FileId) -> NodeIdx {
@@ -1522,6 +1813,16 @@ impl<'e, 'v> FileCx<'e, 'v> {
     pub fn resolve_ref(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec) -> Outcome {
         let name = self.view.text_str(r.name);
         let Some(kind) = RefKind::from_wire(r.kind) else { return Outcome::st(status::NO_CANDIDATE) };
+        let o = self.resolve_kind(wcx, r, name, kind);
+        if o.status == status::NO_CANDIDATE {
+            if let Some(found) = self.route_handler(r, name, kind) {
+                return found;
+            }
+        }
+        o
+    }
+
+    fn resolve_kind(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, name: &str, kind: RefKind) -> Outcome {
         match kind {
             RefKind::Edge(EdgeKind::Imports) => self.resolve_import_ref(name, r),
             RefKind::Edge(EdgeKind::Extends | EdgeKind::Implements | EdgeKind::TypeOf | EdgeKind::Returns) => self.resolve_type_ref(wcx, r, name, Accept::Type),
