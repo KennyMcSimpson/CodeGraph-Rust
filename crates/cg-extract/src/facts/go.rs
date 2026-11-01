@@ -60,7 +60,7 @@ fn walk(cx: &mut Cx, n: Node, scope: u32) {
                 let text = cx.text(*nm).to_owned();
                 let line = cx.line(*nm);
                 let decl = ty.clone().filter(|t| !t.is_empty()).unwrap_or(vt);
-                if value.and_then(|v| v.named_child(i)).map_or(false, |e| e.kind() == "func_literal") {
+                if value.and_then(|v| v.named_child(i)).is_some_and(|e| e.kind() == "func_literal") {
                     cx.add_binding(scope, &text, BindKind::LocalFn, "", "", line);
                 } else {
                     cx.add_binding(scope, &text, BindKind::Local, &decl, &init, line);

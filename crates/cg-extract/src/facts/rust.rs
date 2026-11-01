@@ -183,7 +183,7 @@ fn use_decl(cx: &mut Cx, n: Node, scope: u32) {
     let Some(arg) = n.child_by_field_name("argument") else { return };
     let line = cx.line(n);
     let mut out = Vec::new();
-    flatten(cx, arg, &mut Vec::new(), &mut out);
+    flatten(cx, arg, &[], &mut out);
     for (path, local, wildcard) in out {
         // path = full item path segments; the item is the last one
         if wildcard {
@@ -213,11 +213,11 @@ fn use_decl(cx: &mut Cx, n: Node, scope: u32) {
 }
 
 /// (full path, alias, is_wildcard) triples of a use tree.
-fn flatten(cx: &Cx, n: Node, prefix: &mut Vec<String>, out: &mut Vec<(Vec<String>, Option<String>, bool)>) {
+fn flatten(cx: &Cx, n: Node, prefix: &[String], out: &mut Vec<(Vec<String>, Option<String>, bool)>) {
     let segs = |node: Node| -> Vec<String> { cx.text(node).split("::").map(|s| s.trim().to_owned()).collect() };
     match n.kind() {
         "identifier" | "crate" | "super" | "self" | "scoped_identifier" => {
-            let mut p = prefix.clone();
+            let mut p = prefix.to_vec();
             let s = segs(n);
             if s.len() == 1 && s[0] == "self" && !p.is_empty() {
                 // `use a::b::{self}` imports module `b`
@@ -229,7 +229,7 @@ fn flatten(cx: &Cx, n: Node, prefix: &mut Vec<String>, out: &mut Vec<(Vec<String
         "use_as_clause" => {
             let alias = n.child_by_field_name("alias").map(|a| cx.text(a).to_owned());
             if let Some(path) = n.child_by_field_name("path") {
-                let mut p = prefix.clone();
+                let mut p = prefix.to_vec();
                 let s = segs(path);
                 if !(s.len() == 1 && s[0] == "self" && !p.is_empty()) {
                     p.extend(s);
@@ -238,14 +238,14 @@ fn flatten(cx: &Cx, n: Node, prefix: &mut Vec<String>, out: &mut Vec<(Vec<String
             }
         }
         "scoped_use_list" => {
-            let mut p = prefix.clone();
+            let mut p = prefix.to_vec();
             if let Some(path) = n.child_by_field_name("path") {
                 p.extend(segs(path));
             }
             if let Some(list) = n.child_by_field_name("list") {
                 for c in kids(list) {
                     if c.is_named() {
-                        flatten(cx, c, &mut p.clone(), out);
+                        flatten(cx, c, &p, out);
                     }
                 }
             }
@@ -253,12 +253,12 @@ fn flatten(cx: &Cx, n: Node, prefix: &mut Vec<String>, out: &mut Vec<(Vec<String
         "use_list" => {
             for c in kids(n) {
                 if c.is_named() {
-                    flatten(cx, c, &mut prefix.clone(), out);
+                    flatten(cx, c, prefix, out);
                 }
             }
         }
         "use_wildcard" => {
-            let mut p = prefix.clone();
+            let mut p = prefix.to_vec();
             if let Some(path) = n.named_child(0) {
                 p.extend(segs(path));
             }

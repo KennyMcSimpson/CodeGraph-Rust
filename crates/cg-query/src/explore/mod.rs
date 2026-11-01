@@ -129,7 +129,7 @@ impl Graph {
         let bytes = std::fs::read(abs).ok()?;
         let text = String::from_utf8_lossy(&bytes);
         let mut lines: Vec<String> = text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l).to_owned()).collect();
-        if lines.last().map_or(false, |l| l.is_empty()) {
+        if lines.last().is_some_and(|l| l.is_empty()) {
             lines.pop();
         }
         Some(lines)
@@ -191,14 +191,14 @@ impl Graph {
         let named_types: FxHashSet<NodeIdx> = named.iter().flat_map(|n| n.nodes.iter().copied()).filter(|n| self.kind(*n).is_type()).collect();
         let pascal_types: FxHashSet<NodeIdx> = words
             .iter()
-            .filter(|t| t.raw.chars().next().map_or(false, |c| c.is_uppercase()))
+            .filter(|t| t.raw.chars().next().is_some_and(|c| c.is_uppercase()))
             .flat_map(|t| self.view.by_name(&t.raw).collect::<Vec<_>>())
             .filter(|n| self.kind(*n).is_type())
             .collect();
         for nt in named.iter_mut() {
             if nt.nodes.len() > 1 {
                 for set in [&named_types, &pascal_types] {
-                    let pref: Vec<NodeIdx> = nt.nodes.iter().copied().filter(|n| self.containers(*n).first().map_or(false, |c| set.contains(c))).collect();
+                    let pref: Vec<NodeIdx> = nt.nodes.iter().copied().filter(|n| self.containers(*n).first().is_some_and(|c| set.contains(c))).collect();
                     if !pref.is_empty() && pref.len() < nt.nodes.len() {
                         nt.nodes = pref;
                         break;
@@ -244,7 +244,7 @@ impl Graph {
             let mut next: Vec<NodeIdx> = Vec::new();
             for n in frontier {
                 let base = rel[&n];
-                let mut push = |other: NodeIdx, decay: f32, rel: &mut FxHashMap<NodeIdx, f32>, next: &mut Vec<NodeIdx>| {
+                let push = |other: NodeIdx, decay: f32, rel: &mut FxHashMap<NodeIdx, f32>, next: &mut Vec<NodeIdx>| {
                     let k = self.kind(other);
                     if !is_listed(k) || rel.len() >= 200 {
                         return;
@@ -437,9 +437,7 @@ impl Graph {
                 ranges = window::plan(wants.clone(), budget.gap, &costs, cap);
                 let wanted_lines: usize = wants.iter().map(|w| (w.end - w.start + 1) as usize).sum();
                 let shown_lines: usize = ranges.iter().map(|r| (r.end - r.start + 1) as usize).sum();
-                if shown_lines + 2 < wanted_lines.min(lines.len()) && ranges.len() < 2 && !only_pin {
-                    trimmed_any = true;
-                } else if ranges.iter().any(|r| r.end - r.start > 400) {
+                if (shown_lines + 2 < wanted_lines.min(lines.len()) && ranges.len() < 2 && !only_pin) || ranges.iter().any(|r| r.end - r.start > 400) {
                     trimmed_any = true;
                 }
             }

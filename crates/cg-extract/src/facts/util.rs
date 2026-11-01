@@ -150,22 +150,6 @@ pub fn simple_type_name(t: &str) -> String {
     name.to_owned()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn type_names() {
-        assert_eq!(simple_type_name("Foo<T>"), "Foo");
-        assert_eq!(simple_type_name("&mut Foo"), "Foo");
-        assert_eq!(simple_type_name("*Server"), "Server");
-        assert_eq!(simple_type_name("pkg.Type"), "pkg.Type");
-        assert_eq!(simple_type_name("std::vec::Vec<u8>"), "std::vec::Vec");
-        assert_eq!(simple_type_name("Foo?"), "Foo");
-        assert_eq!(simple_type_name("[]Foo"), "");
-    }
-}
-
 /// `'./x'` / `"./x"` / `` `./x` `` -> `./x`; anything else is returned trimmed.
 pub fn unquote(s: &str) -> &str {
     let t = s.trim();
@@ -182,4 +166,20 @@ pub fn kids<'t>(n: Node<'t>) -> impl Iterator<Item = Node<'t>> {
     let mut c = n.walk();
     let v: Vec<Node<'t>> = n.children(&mut c).collect();
     v.into_iter()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn type_names() {
+        assert_eq!(simple_type_name("Foo<T>"), "Foo");
+        assert_eq!(simple_type_name("&mut Foo"), "Foo");
+        assert_eq!(simple_type_name("*Server"), "Server");
+        assert_eq!(simple_type_name("pkg.Type"), "pkg.Type");
+        assert_eq!(simple_type_name("std::vec::Vec<u8>"), "std::vec::Vec");
+        assert_eq!(simple_type_name("Foo?"), "Foo");
+        assert_eq!(simple_type_name("[]Foo"), "");
+    }
 }

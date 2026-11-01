@@ -197,10 +197,6 @@ fn pair_nodes(old_view: &View, new_view: &View, f: FileId, remap: &mut FxHashMap
     }
 }
 
-fn is_import_kind(kind: u8) -> bool {
-    matches!(RefKind::from_wire(kind), Some(RefKind::Edge(EdgeKind::Imports)))
-}
-
 fn is_hierarchy_kind(kind: u8) -> bool {
     matches!(RefKind::from_wire(kind), Some(RefKind::Edge(EdgeKind::Extends | EdgeKind::Implements)))
 }
@@ -314,7 +310,7 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
     let mut extracted: Vec<Option<FileBatch>> = (0..entries.len()).map(|_| None).collect();
     extract_stream(&entries, &xcfg, |i, b| {
         if let Some(mut b) = b {
-            if deprio.as_ref().map_or(false, |g| g.matched_path_or_any_parents(&entries[i].rel, false).is_ignore()) {
+            if deprio.as_ref().is_some_and(|g| g.matched_path_or_any_parents(&entries[i].rel, false).is_ignore()) {
                 b.flags |= fileflags::DEPRIORITIZED;
             }
             extracted[i] = Some(b);
@@ -404,7 +400,7 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
         let old = if states[i] == DeltaState::Replaced { defs_of(&base_view, *f) } else { BTreeMap::new() };
         let new = defs_of(&view1, *f);
         for (k, details) in &new {
-            if old.get(k).map_or(true, |od| od != details) && !old.contains_key(k) {
+            if (old.get(k) != Some(details)) && !old.contains_key(k) {
                 d_names.insert(k.name.clone());
             }
         }
@@ -428,7 +424,7 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
     }
     let tail_ids: FxHashSet<u32> = d_names.iter().filter_map(|n| base.names.find(n.as_bytes())).map(|s| s.0).collect();
     let is_dead = {
-        let mut bits = vec![0u64; (base.p.nodes_hot.len() + 63) / 64];
+        let mut bits = vec![0u64; base.p.nodes_hot.len().div_ceil(64)];
         for n in &dead_nodes {
             bits[*n as usize / 64] |= 1u64 << (*n % 64);
         }
@@ -800,7 +796,7 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
             for e in base_view.out_edges(NodeIdx(n)) {
                 let keep = match e.class {
                     outkind::CLASS_EXTRACT => true,
-                    outkind::CLASS_RESOLVE => e.ref_idx.map_or(false, |r| !outcomes.contains_key(&r)),
+                    outkind::CLASS_RESOLVE => e.ref_idx.is_some_and(|r| !outcomes.contains_key(&r)),
                     _ => false,
                 };
                 if !keep {
@@ -824,7 +820,7 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
                     line: e.line.unwrap_or(NONE),
                     col: e.col.unwrap_or(NONE),
                     res: e.res,
-                    ref_idx: e.ref_idx.map_or(NONE, |r| final_ref(r)),
+                    ref_idx: e.ref_idx.map_or(NONE, &final_ref),
                     meta,
                     order: 0,
                 });

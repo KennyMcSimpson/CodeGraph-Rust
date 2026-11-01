@@ -34,6 +34,7 @@ struct Out {
 }
 
 impl Out {
+    #[allow(clippy::too_many_arguments)] // one call site per synthesis pass; a builder would only add noise
     fn push(
         &mut self,
         kind: EdgeKind,
@@ -169,7 +170,7 @@ fn go_implements(e: &Engine<'_>, out: &mut Out) -> Vec<(NodeIdx, NodeIdx)> {
             continue;
         }
         // intersect candidate sets, rarest method first
-        let mut order: Vec<&str> = names.iter().copied().collect();
+        let mut order: Vec<&str> = names.to_vec();
         order.sort_by_key(|n| by_method.get(*n).map_or(0, |v| v.len()));
         let Some(first) = by_method.get(order[0]) else { continue };
         let mut cands: Vec<NodeIdx> = first.clone();

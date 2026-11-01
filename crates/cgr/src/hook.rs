@@ -105,7 +105,7 @@ fn find_project(cwd: &Path, prompt_words: &[String]) -> Option<(Store, bool)> {
     // prefer the sub-project whose name the prompt mentions
     let pick = found
         .iter()
-        .find(|p| p.file_name().map_or(false, |n| prompt_words.iter().any(|w| w.eq_ignore_ascii_case(&n.to_string_lossy()))))
+        .find(|p| p.file_name().is_some_and(|n| prompt_words.iter().any(|w| w.eq_ignore_ascii_case(&n.to_string_lossy()))))
         .or_else(|| found.first())
         .cloned()?;
     Some((Store::at(&pick), true))
@@ -163,7 +163,7 @@ fn compute(prompt: &str, cwd: &Path) -> Option<String> {
 }
 
 pub fn run() -> i32 {
-    if brand::env::get(brand::env::NO_PROMPT_HOOK, Some(brand::env::NO_PROMPT_HOOK_UPSTREAM)).map_or(false, |v| v == "1") {
+    if brand::env::get(brand::env::NO_PROMPT_HOOK, Some(brand::env::NO_PROMPT_HOOK_UPSTREAM)).is_some_and(|v| v == "1") {
         return 0;
     }
     #[cfg(unix)]

@@ -182,6 +182,8 @@ pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
 
 /// `delta`: the global `FileId` of each batch and the base id spaces. With `None` this builds a
 /// base segment (dense edge arrays); with `Some` the result has the delta layout.
+// ~30 partitions are assigned in file order near the end; one literal would be less readable
+#[allow(clippy::field_reassign_with_default)]
 pub fn build_draft_at(batches: &[FileBatch], delta: Option<(&[FileId], BuildBase)>, project: &ProjectMeta) -> Draft {
     debug_assert!(batches.windows(2).all(|w| w[0].rel.as_bytes() < w[1].rel.as_bytes()), "batches must be sorted by path");
     let bb = delta.map(|d| d.1).unwrap_or_default();

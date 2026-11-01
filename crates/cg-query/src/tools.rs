@@ -214,7 +214,8 @@ fn handle_callers(env: &ToolEnv<'_>, args: &Value, callers: bool) -> ToolOutput 
     let title = if callers { "Callers of" } else { "Callees of" };
     let collect = |defs: &[NodeIdx]| -> Vec<String> {
         let mut seen: FxHashMap<NodeIdx, usize> = FxHashMap::default();
-        let mut rows: Vec<(NodeIdx, Vec<u32>, EdgeKind, Option<String>, bool, bool)> = Vec::new();
+        type Row = (NodeIdx, Vec<u32>, EdgeKind, Option<String>, bool, bool);
+        let mut rows: Vec<Row> = Vec::new();
         for d in defs {
             let rel = if callers { g.callers(*d, 1, 1000) } else { g.callees(*d, 1, 1000) };
             for r in rel {
@@ -464,7 +465,7 @@ fn node_section(g: &Graph, n: NodeIdx, include_code: bool) -> String {
             }
         } else if let Ok(src) = g.view.read_source(f) {
             let (s, e) = (g.line(n) as usize, g.end_line(n).max(g.line(n)) as usize);
-            let body: Vec<String> = src.lines().enumerate().filter(|(i, _)| i + 1 >= s && i + 1 <= e).map(|(i, l)| format!("{}\t{l}", i + 1)).collect();
+            let body: Vec<String> = src.lines().enumerate().filter(|(i, _)| *i + 1 >= s && *i < e).map(|(i, l)| format!("{}\t{l}", i + 1)).collect();
             if !body.is_empty() {
                 lines.push(String::new());
                 lines.push(format!("```{}", g.view.file(f).lang().as_str()));
@@ -657,8 +658,8 @@ fn handle_files(env: &ToolEnv<'_>, args: &Value) -> ToolOutput {
     let mut files: Vec<FileId> = g
         .view
         .files()
-        .filter(|f| dir.as_ref().map_or(true, |d| g.path(*f) == d || g.path(*f).starts_with(&format!("{d}/"))))
-        .filter(|f| glob.as_ref().map_or(true, |m| m.is_match(g.path(*f))))
+        .filter(|f| dir.as_ref().is_none_or(|d| g.path(*f) == d || g.path(*f).starts_with(&format!("{d}/"))))
+        .filter(|f| glob.as_ref().is_none_or(|m| m.is_match(g.path(*f))))
         .collect();
     files.sort_by(|a, b| g.path(*a).cmp(g.path(*b)));
     if files.is_empty() {
@@ -733,7 +734,7 @@ fn handle_files(env: &ToolEnv<'_>, args: &Value) -> ToolOutput {
                 let parts: Vec<&str> = g.path(*f).split('/').collect();
                 for (i, part) in parts.iter().enumerate() {
                     let depth = i;
-                    if max_depth.map_or(false, |m| depth >= m) {
+                    if max_depth.is_some_and(|m| depth >= m) {
                         break;
                     }
                     let key = parts[..=i].join("/");

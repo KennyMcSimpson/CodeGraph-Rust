@@ -22,7 +22,7 @@ pub fn split_identifier(name: &str, out: &mut Vec<String>) {
             let boundary = (prev.is_lowercase() && c.is_uppercase())
                 || (prev.is_alphabetic() && c.is_ascii_digit())
                 || (prev.is_ascii_digit() && c.is_alphabetic())
-                || (prev.is_uppercase() && c.is_uppercase() && chars.get(i + 1).map_or(false, |n| n.is_lowercase()));
+                || (prev.is_uppercase() && c.is_uppercase() && chars.get(i + 1).is_some_and(|n| n.is_lowercase()));
             if boundary {
                 flush(&mut cur, out);
             }

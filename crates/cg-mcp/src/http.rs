@@ -95,7 +95,7 @@ fn handle_conn(server: Arc<Server>, cfg: HttpConfig, stream: TcpStream, session:
             }
         }
         if let Some(t) = &cfg.token {
-            let ok = header("authorization").map_or(false, |a| a.strip_prefix("Bearer ").map_or(false, |x| x == t));
+            let ok = header("authorization").is_some_and(|a| a.strip_prefix("Bearer ").is_some_and(|x| x == t));
             if !ok {
                 let _ = respond(&mut w, "401 Unauthorized", &[("WWW-Authenticate", "Bearer".into())], b"");
                 continue;

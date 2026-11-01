@@ -102,7 +102,7 @@ impl<'v> Engine<'v> {
         range.map(NodeIdx).filter(move |n| {
             let h = self.view.hot(*n);
             let k = NodeKind::from_u8(h.kind);
-            k.map_or(false, |k| k.is_definition()) && is_top_level(self.view, *n)
+            k.is_some_and(|k| k.is_definition()) && is_top_level(self.view, *n)
         })
     }
 

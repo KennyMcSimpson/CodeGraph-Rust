@@ -37,7 +37,7 @@ fn into_vec<T: bytemuck::Pod>(p: &Part<T>) -> Vec<T> {
 }
 
 pub fn finish(draft: Draft, input: FinishInput) -> Seg {
-    let Draft { mut seg, edges: mut all_edges, emeta: mut emeta } = draft;
+    let Draft { mut seg, edges: mut all_edges, mut emeta } = draft;
     let n_nodes = seg.p.nodes_hot.len();
 
     // ---- references ----
@@ -149,7 +149,7 @@ fn file_stats(seg: &Seg) -> Vec<FileStat> {
             let (a, b) = (f.node_start.0, f.node_start.0 + f.node_count);
             for n in a..b {
                 let h = &hot[n as usize];
-                if NodeKind::from_u8(h.kind).map_or(false, |k| k.is_definition()) {
+                if NodeKind::from_u8(h.kind).is_some_and(|k| k.is_definition()) {
                     st.symbols += 1;
                 }
                 for e in seg.p.out_off[n as usize]..seg.p.out_off[n as usize + 1] {

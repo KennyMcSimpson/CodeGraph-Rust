@@ -122,7 +122,7 @@ pub fn build_seg(root: &Path, opts: &IndexOptions) -> Result<Built> {
     let mut batches: Vec<FileBatch> = Vec::with_capacity(scanned.files.len());
     extract_stream(&scanned.files, &cfg, |i, b| {
         if let Some(mut b) = b {
-            if deprio.as_ref().map_or(false, |g| g.matched_path_or_any_parents(&scanned.files[i].rel, false).is_ignore()) {
+            if deprio.as_ref().is_some_and(|g| g.matched_path_or_any_parents(&scanned.files[i].rel, false).is_ignore()) {
                 b.flags |= fileflags::DEPRIORITIZED;
             }
             batches.push(b);

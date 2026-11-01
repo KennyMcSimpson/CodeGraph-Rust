@@ -389,8 +389,7 @@ mod tests {
     use crate::seg::{SegMeta, SegParts};
 
     fn tiny(n: u32) -> Seg {
-        let mut p = SegParts::default();
-        p.out_off = Part::owned(vec![0, n]);
+        let p = SegParts { out_off: Part::owned(vec![0, n]), ..Default::default() };
         let meta = SegMeta { kind: "base".into(), format_version: brand::FORMAT_VERSION, n_nodes: n, ..Default::default() };
         Seg::from_parts(meta, p)
     }

@@ -3,7 +3,7 @@
 //! `references` its handler functions, so a request path can be followed to the code that
 //! serves it. Scanners are pure functions over the source text.
 
-use cg_core::{EdgeKind, Lang, LangFamily, NodeKind, RefKind};
+use cg_core::{Lang, LangFamily, NodeKind, RefKind};
 use cg_extract::post::node_digest;
 use cg_extract::{ExtraNode, ExtraRef, FileHook, HookCtx, HookOut};
 use regex::Regex;

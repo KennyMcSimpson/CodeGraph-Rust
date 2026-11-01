@@ -39,7 +39,7 @@ impl<T: Pod> Part<T> {
     /// View `bytes` bytes at `offset` of the map as `[T]`; checks bounds, size and alignment.
     pub fn from_map(map: &Arc<Mmap>, offset: usize, bytes: usize) -> Result<Self> {
         let sz = std::mem::size_of::<T>();
-        if sz == 0 || bytes % sz != 0 {
+        if sz == 0 || !bytes.is_multiple_of(sz) {
             return Err(CgError::corrupt(format!("partition size {bytes} is not a multiple of {sz}")));
         }
         let end = offset.checked_add(bytes).ok_or_else(|| CgError::corrupt("partition overflows"))?;
@@ -47,7 +47,7 @@ impl<T: Pod> Part<T> {
             return Err(CgError::corrupt("partition extends past the end of the file"));
         }
         let base = map.as_ptr() as usize + offset;
-        if base % std::mem::align_of::<T>() != 0 {
+        if !base.is_multiple_of(std::mem::align_of::<T>()) {
             return Err(CgError::corrupt("misaligned partition"));
         }
         Ok(Part::Mapped { ptr: base as *const T, len: bytes / sz, _keep: map.clone() })

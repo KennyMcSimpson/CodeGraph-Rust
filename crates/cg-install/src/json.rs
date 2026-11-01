@@ -117,7 +117,7 @@ pub fn array_strings(arr: &CstArray) -> Vec<String> {
 /// Serialise: JSON files end with a newline.
 pub fn finish(root: &CstRootNode, original: Option<&str>) -> String {
     let mut s = root.to_string();
-    if !s.ends_with('\n') && original.map_or(true, |o| o.ends_with('\n') || o.trim().is_empty()) {
+    if !s.ends_with('\n') && original.is_none_or(|o| o.ends_with('\n') || o.trim().is_empty()) {
         s.push('\n');
     }
     s
@@ -125,7 +125,7 @@ pub fn finish(root: &CstRootNode, original: Option<&str>) -> String {
 
 /// True when the document is an empty object (nothing left worth keeping).
 pub fn is_empty_object(root: &CstRootNode) -> bool {
-    root.object_value().map_or(true, |o| o.properties().is_empty())
+    root.object_value().is_none_or(|o| o.properties().is_empty())
 }
 
 #[cfg(test)]

@@ -106,7 +106,7 @@ impl Graph {
                     if !is_call_like(&e2) || e2.dst == a || e2.dst == e1.dst {
                         continue;
                     }
-                    if tok_of.get(&e2.dst).map_or(false, |t| *t != tok_of[&a]) {
+                    if tok_of.get(&e2.dst).is_some_and(|t| *t != tok_of[&a]) {
                         via.entry(e2.dst).or_insert(Link { to: e2.dst, first: e1, bridge: Some((e1.dst, e2)) });
                     }
                 }
@@ -133,7 +133,7 @@ impl Graph {
         impl<'a> Search<'a> {
             fn go(&mut self, path: &mut Vec<(NodeIdx, Option<Link>)>, used: u64, visited: &mut FxHashSet<NodeIdx>) {
                 let named = path.len();
-                let bridges = path.iter().filter(|p| p.1.as_ref().map_or(false, |l| l.bridge.is_some())).count() as i64;
+                let bridges = path.iter().filter(|p| p.1.as_ref().is_some_and(|l| l.bridge.is_some())).count() as i64;
                 let key = (named, -bridges);
                 if key > self.best_key {
                     self.best_key = key;

@@ -133,7 +133,7 @@ pub fn current_rss_mb() -> u64 {
     {
         if let Ok(s) = std::fs::read_to_string("/proc/self/statm") {
             if let Some(pages) = s.split_whitespace().nth(1).and_then(|v| v.parse::<u64>().ok()) {
-                return pages * 4096 >> 20;
+                return (pages * 4096) >> 20;
             }
         }
     }

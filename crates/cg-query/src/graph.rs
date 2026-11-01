@@ -23,7 +23,7 @@ impl Graph {
         let mut b = GlobSetBuilder::new();
         for p in &config.deprioritize {
             let p = p.trim_matches('/');
-            for g in [format!("{p}"), format!("{p}/**"), format!("**/{p}"), format!("**/{p}/**")] {
+            for g in [p.to_string(), format!("{p}/**"), format!("**/{p}"), format!("**/{p}/**")] {
                 if let Ok(g) = Glob::new(&g) {
                     b.add(g);
                 }

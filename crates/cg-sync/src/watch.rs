@@ -168,7 +168,7 @@ fn run_watch(root: &Path, opts: &SyncOptions, stop: &AtomicBool) {
                     continue;
                 }
                 for p in ev.paths {
-                    if p.file_name().and_then(|n| n.to_str()).map_or(false, is_config_name) {
+                    if p.file_name().and_then(|n| n.to_str()).is_some_and(is_config_name) {
                         filter = Filter::new(root);
                     }
                     if filter.relevant(&p) {

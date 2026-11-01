@@ -32,7 +32,7 @@ pub fn init(path: Option<PathBuf>, local_only: bool) -> Result<i32> {
     let report = cg_resolve::index_project(&root, &Default::default())?;
     if local_only {
         let exclude = root.join(".git/info/exclude");
-        if exclude.parent().map_or(false, |d| d.is_dir()) {
+        if exclude.parent().is_some_and(|d| d.is_dir()) {
             let cur = std::fs::read_to_string(&exclude).unwrap_or_default();
             if !cur.lines().any(|l| l.trim() == format!("{}/", brand::DATA_DIR)) {
                 let sep = if cur.ends_with('\n') || cur.is_empty() { "" } else { "\n" };
@@ -122,7 +122,7 @@ pub fn status(path: Option<PathBuf>, json: bool, strict: bool, verify: bool) -> 
             None => println!("  changes since last sync: unknown"),
         }
     }
-    if strict && changes.map_or(false, |c| c.total() > 0) {
+    if strict && changes.is_some_and(|c| c.total() > 0) {
         return Ok(1);
     }
     Ok(0)
@@ -404,7 +404,7 @@ pub fn serve(base: Option<PathBuf>, http: Option<String>, token: Option<String>,
     // stdout belongs to the protocol: all logging goes to stderr
     let filter = std::env::var(brand::env::LOG).unwrap_or_else(|_| "warn".into());
     let _ = tracing_subscriber::fmt().with_writer(std::io::stderr).with_env_filter(tracing_subscriber::EnvFilter::new(filter)).try_init();
-    let dedup = brand::env::get("CGR_EXPLORE_DEDUP", Some("CODEGRAPH_EXPLORE_DEDUP")).map_or(false, |v| v == "1");
+    let dedup = brand::env::get("CGR_EXPLORE_DEDUP", Some("CODEGRAPH_EXPLORE_DEDUP")).is_some_and(|v| v == "1");
     let cfg_path = base.map(|p| p.canonicalize().unwrap_or(p));
     let cfg = cg_mcp::Config { path: cfg_path.clone(), tools: cg_mcp::defs::allowlist_from_env(), dedup };
     let server = cg_mcp::Server::new(cfg);

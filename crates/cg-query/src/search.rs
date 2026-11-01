@@ -109,9 +109,9 @@ pub fn tokenize_query(q: &str) -> Vec<QueryToken> {
         let tok = if t.contains('/') || (has_file_ext(&t) && !t.contains("::")) {
             QueryToken { lower: t.to_lowercase(), raw: t, kind: TokKind::Path, parts: Vec::new(), anchor }
         } else if t.contains("::") || (t.contains('.') && t.split('.').filter(|p| !p.is_empty()).count() >= 2) {
-            let parts: Vec<String> = t.split(|c| c == '.' || c == ':').filter(|p| !p.is_empty()).map(|p| p.to_owned()).collect();
+            let parts: Vec<String> = t.split(['.', ':']).filter(|p| !p.is_empty()).map(|p| p.to_owned()).collect();
             if parts.len() < 2
-                || !parts.iter().all(|p| p.chars().all(is_ident_char) && p.chars().next().map_or(false, |c| c.is_alphabetic() || c == '_' || c == '$'))
+                || !parts.iter().all(|p| p.chars().all(is_ident_char) && p.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_' || c == '$'))
                 || parts.iter().all(|p| p.len() < 2)
             {
                 // prose such as "e.g." or "v1.2": treat the pieces as words
@@ -159,7 +159,6 @@ fn push_plain(word: &str, out: &mut Vec<QueryToken>, seen: &mut FxHashSet<(Strin
 #[derive(Clone, Copy, Default)]
 struct Cand {
     score: f32,
-    terms: u8,
 }
 
 /// Per-search accumulator: best score per node and the set of tokens that reached it.
@@ -435,7 +434,7 @@ impl Graph {
                         acc.add(slot, n, 105.0);
                     } else if t.parts.len() >= 2 {
                         let owner = &t.parts[t.parts.len() - 2];
-                        if self.containers(n).first().map_or(false, |c| self.name(*c).eq_ignore_ascii_case(owner)) {
+                        if self.containers(n).first().is_some_and(|c| self.name(*c).eq_ignore_ascii_case(owner)) {
                             acc.add(slot, n, 100.0);
                         } else {
                             acc.add(slot, n, 50.0);
@@ -456,8 +455,7 @@ impl Graph {
                 // file named after the word (`Cache` -> cache.rs / Cache.java)
                 for cand in [t.raw.clone(), capitalize(&t.raw), t.lower.clone()] {
                     for f in self.files_matching(&cand) {
-                        if !cand.contains('/')
-                            && self.path(f).rsplit('/').next().map_or(false, |b| b == cand || b.rsplit_once('.').map_or(false, |x| x.0 == cand))
+                        if !cand.contains('/') && self.path(f).rsplit('/').next().is_some_and(|b| b == cand || b.rsplit_once('.').is_some_and(|x| x.0 == cand))
                         {
                             acc.add(slot, self.file_node(f), if t.kind == TokKind::Code { 80.0 } else { 55.0 });
                         }
@@ -517,7 +515,7 @@ impl Graph {
             }
         }
         // 4. definition prefix: class-like names starting with the (capitalised / stemmed) word
-        if word.chars().next().map_or(false, |c| c.is_alphabetic()) && lower.len() >= 3 {
+        if word.chars().next().is_some_and(|c| c.is_alphabetic()) && lower.len() >= 3 {
             for variant in prefix_variants(&lower) {
                 let prefix = capitalize(&variant);
                 for (seg, d) in self.layers() {
@@ -659,7 +657,7 @@ impl Graph {
                         None => list.to_vec(),
                         Some(prev) => intersect_sorted(&prev, list),
                     });
-                    if cand.as_ref().map_or(false, |c| c.is_empty()) {
+                    if cand.as_ref().is_some_and(|c| c.is_empty()) {
                         break;
                     }
                 }

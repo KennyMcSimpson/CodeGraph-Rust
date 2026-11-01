@@ -62,6 +62,9 @@ struct RootsState {
 
 type Job = Box<dyn FnOnce() + Send>;
 
+/// A project with its session history and its "stale" flag, as handed to a tool call.
+type ProjectHandles = (Arc<Project>, Arc<Mutex<History>>, Arc<AtomicBool>);
+
 pub struct Server {
     cfg: Config,
     cache: Mutex<Cache>,
@@ -254,7 +257,7 @@ impl Server {
     }
 
     /// Open (or refresh) the project for a tool call.
-    fn project_for(&self, project_path: Option<&str>) -> Result<(Arc<Project>, Arc<Mutex<History>>, Arc<AtomicBool>), ToolOutput> {
+    fn project_for(&self, project_path: Option<&str>) -> Result<ProjectHandles, ToolOutput> {
         let default = self.default_root();
         let (start, explicit) = match project_path.map(str::trim).filter(|s| !s.is_empty()) {
             Some(p) => {
@@ -355,7 +358,7 @@ impl Server {
             (Some(m), Some(id)) => self.handle_request(&m, id, msg.get("params").cloned().unwrap_or(Value::Null), reply),
             (Some(m), None) => self.handle_notification(&m),
             (None, Some(id)) => {
-                if id.as_str().map_or(false, |s| s.starts_with("cgr-roots-")) {
+                if id.as_str().is_some_and(|s| s.starts_with("cgr-roots-")) {
                     self.on_roots_response(&msg);
                 }
             }

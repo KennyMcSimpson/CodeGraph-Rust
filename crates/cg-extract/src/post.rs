@@ -53,9 +53,8 @@ pub fn strip_js_comments(src: &str) -> String {
                 out[i + 1] = b' ';
                 i += 2;
                 while i < b.len() && !(b[i] == b'*' && b.get(i + 1) == Some(&b'/')) {
-                    if b[i] != b'\n' && b[i] != b'\r' && b[i] & 0xC0 != 0x80 {
-                        out[i] = b' ';
-                    } else if b[i] & 0xC0 == 0x80 {
+                    // keep line breaks (so line numbers survive); blank everything else, continuation bytes included
+                    if b[i] != b'\n' && b[i] != b'\r' {
                         out[i] = b' ';
                     }
                     i += 1;
@@ -184,7 +183,7 @@ fn import_equals_tail(before: &str) -> bool {
     }
     let head = t[..name_start].trim_end();
     let head = head.strip_suffix("type").map(str::trim_end).unwrap_or(head);
-    head.ends_with("import") && head[..head.len() - 6].chars().next_back().map_or(true, |c| !(c.is_alphanumeric() || c == '_'))
+    head.ends_with("import") && head[..head.len() - 6].chars().next_back().is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
 }
 
 #[cfg(test)]

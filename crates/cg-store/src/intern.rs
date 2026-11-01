@@ -26,15 +26,10 @@ impl StrArena {
     }
 }
 
+#[derive(Default)]
 pub struct Interner<'a> {
     map: FxHashMap<&'a str, u32>,
     items: Vec<&'a str>,
-}
-
-impl<'a> Default for Interner<'a> {
-    fn default() -> Self {
-        Interner { map: FxHashMap::default(), items: Vec::new() }
-    }
 }
 
 impl<'a> Interner<'a> {
@@ -55,6 +50,10 @@ impl<'a> Interner<'a> {
 
     pub fn len(&self) -> usize {
         self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
     }
 
     pub fn get(&self, s: &str) -> Option<u32> {

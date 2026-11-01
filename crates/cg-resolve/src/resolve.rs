@@ -121,9 +121,12 @@ pub struct FileCx<'e, 'v> {
     top_dir: &'v str,
 }
 
+/// Fields of a class: name and declared type (when it resolves).
+type FieldList = Vec<(Box<str>, Option<NodeIdx>)>;
+
 pub struct WorkerCx<'e, 'v> {
     cache: Vec<(FileId, Rc<FileCx<'e, 'v>>)>,
-    field_cache: FxHashMap<NodeIdx, Vec<(Box<str>, Option<NodeIdx>)>>,
+    field_cache: FxHashMap<NodeIdx, FieldList>,
 }
 
 impl<'e, 'v> WorkerCx<'e, 'v> {
@@ -312,9 +315,8 @@ impl<'e, 'v> FileCx<'e, 'v> {
             if cf == self.file {
                 return Some(cand);
             }
-            if self.pkg.0 != NONE && self.e.modules.pkg_of(cf) == self.pkg {
-                best = Some(cand);
-            } else if best.is_none() {
+            // a candidate in the caller's package wins over earlier ones; otherwise the first stays
+            if (self.pkg.0 != NONE && self.e.modules.pkg_of(cf) == self.pkg) || best.is_none() {
                 best = Some(cand);
             }
         }
@@ -336,7 +338,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
             }
             if s.start <= pos && end <= s.end {
                 let size = s.end - s.start;
-                if best.map_or(true, |(_, b)| size < b) {
+                if best.is_none_or(|(_, b)| size < b) {
                     best = Some((i as u32, size));
                 }
             }
@@ -531,7 +533,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
         match self.family {
             LangFamily::Go => {
                 let same_pkg = self.pkg.0 != NONE && self.e.modules.pkg_of(h.file) == self.pkg;
-                same_pkg || name.chars().next().map_or(false, |c| c.is_uppercase())
+                same_pkg || name.chars().next().is_some_and(|c| c.is_uppercase())
             }
             LangFamily::Jvm => h.vis != Visibility::Private as u8,
             _ => true,
@@ -653,7 +655,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
     #[allow(clippy::too_many_arguments)]
     pub fn resolve_name(
         &self,
-        wcx: &mut WorkerCx<'e, 'v>,
+        _wcx: &mut WorkerCx<'e, 'v>,
         name: &str,
         accept: Accept,
         scope: u32,
@@ -723,7 +725,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
         }
         if !same.is_empty() {
             // prefer top-level definitions, then the first declared
-            let pick = same.iter().copied().find(|n| view.node(*n).parent().map_or(false, |p| kind_of(view, p) == NodeKind::File)).unwrap_or(same[0]);
+            let pick = same.iter().copied().find(|n| view.node(*n).parent().is_some_and(|p| kind_of(view, p) == NodeKind::File)).unwrap_or(same[0]);
             return NameRes::Found(pick, by::LEXICAL, 92);
         }
         // 5. same package / module
@@ -983,7 +985,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
                 if let Some(list) = cx.bindings.get(&(cs, self.view.name_str(self.view.hot(t).name))) {
                     let _ = list;
                 }
-                for (key, _) in cx.bindings.iter() {
+                for key in cx.bindings.keys() {
                     if key.0 == cs && key.1 == method {
                         return Outcome::st(status::LOCAL_BINDING);
                     }

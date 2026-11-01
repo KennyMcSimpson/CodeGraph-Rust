@@ -285,6 +285,12 @@ impl Lang {
     }
 }
 
+impl std::fmt::Display for Lang {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,11 +316,5 @@ mod tests {
         }
         assert_eq!(Lang::parse("klingon"), Lang::Unknown);
         assert_eq!(Lang::Kotlin.family(), Lang::Java.family());
-    }
-}
-
-impl std::fmt::Display for Lang {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
     }
 }

@@ -94,7 +94,7 @@ pub fn assemble_delta(base: &Seg, parts: DeltaParts) -> Seg {
         base_gen,
         indexes,
     } = parts;
-    let Draft { mut seg, edges: mut all_edges, emeta: mut emeta } = draft;
+    let Draft { mut seg, edges: mut all_edges, mut emeta } = draft;
     let bb = base_offsets(base);
     let n_draft_files = seg.p.files.len();
     debug_assert_eq!(n_draft_files, states.len());
@@ -163,7 +163,7 @@ pub fn assemble_delta(base: &Seg, parts: DeltaParts) -> Seg {
     seg.p.refs = Part::owned(refs);
 
     // ---- dead nodes ----
-    let words = (bb.nodes as usize + 63) / 64;
+    let words = (bb.nodes as usize).div_ceil(64);
     let mut dead = vec![0u64; words];
     for n in dead_base_nodes {
         dead[n as usize / 64] |= 1u64 << (n % 64);

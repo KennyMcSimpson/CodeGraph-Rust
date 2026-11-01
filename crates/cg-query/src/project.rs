@@ -5,7 +5,7 @@ use crate::graph::Graph;
 use crate::tools::StatusInfo;
 use cg_core::{brand, CgError, Result};
 use cg_store::{Snapshot, Store};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub struct Project {
     pub store: Store,
@@ -76,7 +76,7 @@ pub fn format_iso_ms(ms: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
 }
 
-pub fn display_path(p: &PathBuf) -> String {
+pub fn display_path(p: &Path) -> String {
     p.display().to_string()
 }
 

@@ -70,7 +70,7 @@ fn enclosing(ctx: &HookCtx<'_>, line: u32, kinds: &[NodeKind]) -> Option<u32> {
         let (s, e) = (n.start_line(), n.end_line());
         if s <= line && line <= e {
             let span = e - s;
-            if best.map_or(true, |(b, _)| span < b) {
+            if best.is_none_or(|(b, _)| span < b) {
                 best = Some((span, row as u32));
             }
         }

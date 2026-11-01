@@ -89,7 +89,7 @@ impl AgentTarget for ClaudeCode {
                     let list = json::object_at(&root, &["hooks"]).array_value_or_set("UserPromptSubmit");
                     let present = list.elements().iter().any(|e| {
                         e.to_serde_value()
-                            .map_or(false, |v| v["hooks"].as_array().map_or(false, |hs| hs.iter().any(|h| h["command"].as_str().map_or(false, is_our_hook))))
+                            .is_some_and(|v| v["hooks"].as_array().is_some_and(|hs| hs.iter().any(|h| h["command"].as_str().is_some_and(is_our_hook))))
                     });
                     if !present {
                         list.append(json::to_input(&json!({"hooks": [{"type": "command", "command": hook}]})));
@@ -116,7 +116,7 @@ impl AgentTarget for ClaudeCode {
             let root = json::parse(&p.settings, Some(text))?;
             if let Some(allow) = root.object_value().and_then(|o| o.object_value("permissions")).and_then(|o| o.array_value("allow")) {
                 for el in allow.elements() {
-                    if el.as_string_lit().and_then(|s| s.decoded_value().ok()).map_or(false, |s| permission_entries().contains(&s)) {
+                    if el.as_string_lit().and_then(|s| s.decoded_value().ok()).is_some_and(|s| permission_entries().contains(&s)) {
                         el.remove();
                     }
                 }
@@ -125,7 +125,7 @@ impl AgentTarget for ClaudeCode {
                         p.remove();
                     }
                     if let Some(perm) = root.object_value().and_then(|o| o.get("permissions")) {
-                        if perm.value().and_then(|v| v.as_object()).map_or(false, |o| o.properties().is_empty()) {
+                        if perm.value().and_then(|v| v.as_object()).is_some_and(|o| o.properties().is_empty()) {
                             perm.remove();
                         }
                     }
@@ -135,7 +135,7 @@ impl AgentTarget for ClaudeCode {
                 for el in list.elements() {
                     let ours = el
                         .to_serde_value()
-                        .map_or(false, |v| v["hooks"].as_array().map_or(false, |hs| hs.iter().any(|h| h["command"].as_str().map_or(false, is_our_hook))));
+                        .is_some_and(|v| v["hooks"].as_array().is_some_and(|hs| hs.iter().any(|h| h["command"].as_str().is_some_and(is_our_hook))));
                     if ours {
                         el.remove();
                     }

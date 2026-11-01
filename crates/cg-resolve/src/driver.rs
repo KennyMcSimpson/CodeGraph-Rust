@@ -58,7 +58,7 @@ pub fn resolve_refs<'e, 'v>(e: &'e Engine<'v>, files: &[FileId], round: Round_, 
             let view = e.view;
             let range = view.ref_range(f);
             let refs = view.refs_of_file(f);
-            let wanted = refs.iter().enumerate().any(|(i, r)| in_round(r.kind, round) && only.map_or(true, |s| s.contains(&(range.start + i as u32))));
+            let wanted = refs.iter().enumerate().any(|(i, r)| in_round(r.kind, round) && only.is_none_or(|s| s.contains(&(range.start + i as u32))));
             if !wanted {
                 return Vec::new();
             }
@@ -66,7 +66,7 @@ pub fn resolve_refs<'e, 'v>(e: &'e Engine<'v>, files: &[FileId], round: Round_, 
             let mut out = Vec::with_capacity(refs.len());
             for (i, r) in refs.iter().enumerate() {
                 let id = range.start + i as u32;
-                if !in_round(r.kind, round) || only.map_or(false, |s| !s.contains(&id)) {
+                if !in_round(r.kind, round) || only.is_some_and(|s| !s.contains(&id)) {
                     continue;
                 }
                 out.push((id, fcx.resolve_ref(wcx, r)));
