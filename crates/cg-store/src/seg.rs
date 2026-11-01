@@ -385,6 +385,9 @@ mod tests {
         std::fs::write(&path, &bytes).unwrap();
         let back = Seg::open(&path).unwrap();
         assert!(back.verify().is_err());
+        // Immutable mappings must be closed before truncating their file; Windows also
+        // enforces this at the OS boundary.
+        drop(back);
         std::fs::write(&path, &bytes[..n - 8]).unwrap();
         assert!(Seg::open(&path).is_err());
         std::fs::write(&path, b"nope").unwrap();
