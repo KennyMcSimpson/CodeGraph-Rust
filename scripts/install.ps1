@@ -1,13 +1,13 @@
 # Install the cgr binary from a GitHub release (Windows).
 #
-#   irm https://raw.githubusercontent.com/NianJiuZst/codegrap-rust/main/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/NianJiuZst/CodeGraph-Rust/main/scripts/install.ps1 | iex
 #
 # Environment: CGR_VERSION (default: latest release), CGR_INSTALL_DIR (default: %LOCALAPPDATA%\Programs\cgr),
 #              CGR_BASE_URL (default: the GitHub releases of this repository)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$repo = 'NianJiuZst/codegrap-rust'
+$repo = 'NianJiuZst/CodeGraph-Rust'
 $base = if ($env:CGR_BASE_URL) { $env:CGR_BASE_URL } else { "https://github.com/$repo/releases/download" }
 $dest = if ($env:CGR_INSTALL_DIR) { $env:CGR_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\cgr' }
 

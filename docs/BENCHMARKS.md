@@ -13,7 +13,7 @@ new graph comparisons for engine version 3. The timing results below remain tied
 
 | Component | Pinned version / setting |
 |---|---|
-| `cgr` | [`b827b1d5bc6d90eaf7e6810e9effcc6dfe42eba4`](https://github.com/NianJiuZst/CodeGrap-Rust/tree/b827b1d5bc6d90eaf7e6810e9effcc6dfe42eba4), merged main |
+| `cgr` | [`b827b1d5bc6d90eaf7e6810e9effcc6dfe42eba4`](https://github.com/NianJiuZst/CodeGraph-Rust/tree/b827b1d5bc6d90eaf7e6810e9effcc6dfe42eba4), merged main |
 | Upstream | [`d2e0389b519be398f9bc616b6f7bea8a7edfbc6a`](https://github.com/colbymchenry/codegraph/tree/d2e0389b519be398f9bc616b6f7bea8a7edfbc6a), package.json 1.6.2 |
 | Vendored kernel base | `9d3abb843a84d7610bf987bda7a1db4a6fe3eee3` plus the project's recorded adaptation patches |
 | Machine | Apple M5, 10 cores, 16 GiB RAM, arm64, macOS 26.5.2 |

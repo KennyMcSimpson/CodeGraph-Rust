@@ -18,7 +18,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/NianJiuZst/CodeGrap-Rust"
+repository = "https://github.com/NianJiuZst/CodeGraph-Rust"
 rust-version = "1.89"
 
 # Dependency whitelist: design doc 3.4. New entries need a reason in the PR.

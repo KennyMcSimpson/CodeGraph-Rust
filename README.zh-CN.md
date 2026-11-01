@@ -111,8 +111,8 @@ MCP 增加排队上限、协作取消及项目/监听资源回收。
 目前可用的安装方式是源码安装。需要 **Rust 1.89 或更新版本**、Cargo、Git，以及用于编译 Tree-sitter 语法的 C 编译工具链。
 
 ```sh
-git clone https://github.com/NianJiuZst/CodeGrap-Rust.git
-cd CodeGrap-Rust
+git clone https://github.com/NianJiuZst/CodeGraph-Rust.git
+cd CodeGraph-Rust
 cargo install --path crates/cgr --locked
 cgr version --verbose
 ```
@@ -132,17 +132,17 @@ Windows 下的可执行文件为 `target\release\cgr.exe`。
 ### Release 下载脚本
 
 仓库已包含发布打包流程和校验 SHA-256 的下载脚本。**截至 2026-11-01，尚未发布 GitHub Release。**
-以下命令需要 [Releases 页面](https://github.com/NianJiuZst/CodeGrap-Rust/releases)已有对应平台的归档与校验文件；
+以下命令需要 [Releases 页面](https://github.com/NianJiuZst/CodeGraph-Rust/releases)已有对应平台的归档与校验文件；
 这些文件发布前，请使用上面的源码安装方式。
 
 ```sh
 # Linux / macOS：需要已有发布包
-curl -fsSL https://raw.githubusercontent.com/NianJiuZst/CodeGrap-Rust/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/NianJiuZst/CodeGraph-Rust/main/scripts/install.sh | sh
 ```
 
 ```powershell
 # Windows，PowerShell 7+：需要已有发布包
-irm https://raw.githubusercontent.com/NianJiuZst/CodeGrap-Rust/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/NianJiuZst/CodeGraph-Rust/main/scripts/install.ps1 | iex
 ```
 
 发布流程定义了以下构建目标：
@@ -448,7 +448,7 @@ scripts/bench-local.sh --help
 四个仓库的校验和及增量/全量检查全部通过，详见[性能复测报告](docs/BENCHMARKS.md#full-indexing)。
 本机测量与远程 CI 属于不同验证证据。
 
-代码版本 `f82506e` 已通过全部 9 项[远程 CI 检查](https://github.com/NianJiuZst/CodeGrap-Rust/actions/runs/41286327676)：
+代码版本 `f82506e` 已通过全部 9 项[远程 CI 检查](https://github.com/NianJiuZst/CodeGraph-Rust/actions/runs/41286327676)：
 Linux/macOS/Windows 测试与端到端 smoke、格式和 Clippy、内核来源复现、静态 Linux 构建。
 远程正确性检查不作为性能测量结果。
 
