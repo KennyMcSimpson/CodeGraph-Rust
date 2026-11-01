@@ -223,6 +223,7 @@ pub fn assemble_delta(base: &Seg, parts: DeltaParts) -> Seg {
         seg.p.tokens_fst = Part::owned(ti.fst);
         seg.p.token_post_off = Part::owned(ti.post_off);
         seg.p.token_post = Part::owned(ti.post);
+        seg.p.token_df = Part::owned(ti.df);
         seg.p.node_norm = Part::owned(ti.node_norm);
     }
 

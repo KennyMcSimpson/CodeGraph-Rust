@@ -5,7 +5,7 @@ pub mod detect;
 pub mod sync;
 
 pub use detect::{diff_view, Diff};
-pub use sync::{sync, sync_locked, SyncOptions, SyncReport};
+pub use sync::{compact_if_due, sync, sync_locked, SyncOptions, SyncReport};
 pub mod watch;
 pub use watch::{spawn_watcher, WatchHandle};
 

@@ -38,9 +38,9 @@ const SERVER_INSTRUCTIONS: &str = r#"# Codegraph — code intelligence over an i
 Codegraph is a memory-mapped knowledge graph of every symbol, edge, and file in
 the workspace — pre-computed structure you would otherwise re-derive by
 reading files (cached intelligence: thousands of parse/trace decisions you
-don't pay to re-reason each run). It indexes 30+ languages
-(TypeScript/JavaScript, Python, Go, Rust, Java, C#, C/C++, PHP, Ruby, Swift,
-Kotlin, and more) — don't assume a language here isn't covered. Reads are
+don't pay to re-reason each run). This build indexes TypeScript/JavaScript,
+Python, Go, Rust, Java and Kotlin (including TSX/JSX).
+Other language files are not extracted by this build. Reads are
 sub-millisecond; the index lags writes by ~1s through the file watcher. Reach for it BEFORE *and* while
 writing or editing code — not just for questions: one call returns the
 verbatim source PLUS who calls it and what it affects, so you edit with the
@@ -96,7 +96,7 @@ calls; a grep/read exploration is dozens.
 const SERVER_INSTRUCTIONS_NO_ROOT_INDEX: &str = r#"# Codegraph — available (per-project; pass projectPath)
 
 Codegraph is a knowledge graph of a codebase's symbols, edges, and
-files (30+ languages): one `codegraph_explore` call returns the verbatim, line-numbered source
+files (TypeScript/JavaScript, Python, Go, Rust, Java and Kotlin, including TSX/JSX): one `codegraph_explore` call returns the verbatim, line-numbered source
 of the relevant symbols PLUS the call paths between them and a blast-radius
 summary — replacing a grep + Read loop with one round-trip.
 

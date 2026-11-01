@@ -243,6 +243,7 @@ impl View {
 
     // ---------------------------------------------------------------- strings
     pub fn name_str(&self, id: StrId) -> &str {
+        cg_core::cancel::check();
         match self.d() {
             Some(d) if id.0 != NONE && id.0 >= d.base_names => d.seg.names.get(StrId(id.0 - d.base_names)),
             _ => self.base.names.get(id),
@@ -312,6 +313,7 @@ impl View {
     }
 
     pub fn file(&self, f: FileId) -> FileRef<'_> {
+        cg_core::cancel::check();
         let rec = match self.delta_file(f) {
             Some((pos, _)) => &self.d().unwrap().seg.p.files[pos],
             None => &self.base.p.files[f.idx()],
@@ -364,6 +366,7 @@ impl View {
 
     #[inline]
     pub fn hot(&self, n: NodeIdx) -> &NodeHot {
+        cg_core::cancel::check();
         let i = n.idx();
         match self.d() {
             Some(d) if i >= d.n_base_nodes as usize => &d.seg.p.nodes_hot[i - d.n_base_nodes as usize],
@@ -453,6 +456,7 @@ impl View {
 
     /// Outgoing edges of `n`.
     pub fn out_edges(&self, n: NodeIdx) -> OutEdges<'_> {
+        cg_core::cancel::check();
         let hot = self.hot(n);
         if let Some(d) = self.d() {
             let in_delta_nodes = n.0 >= d.n_base_nodes;

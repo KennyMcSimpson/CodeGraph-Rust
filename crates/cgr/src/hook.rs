@@ -74,30 +74,53 @@ fn is_machine_message(p: &str) -> bool {
 
 /// Nearest index at or above `cwd`; for a monorepo root without one, a sub-project below it.
 fn find_project(cwd: &Path, prompt_words: &[String]) -> Option<(Store, bool)> {
+    cg_core::cancel::check_now();
     if let Some(s) = Store::locate(cwd) {
         return Some((s, false));
     }
+    // Discovery is a convenience for a monorepo, never a search of the entire machine.
+    if cwd.parent().is_none() || std::env::var_os("HOME").is_some_and(|p| cwd == Path::new(&p)) {
+        return None;
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+    let mut visited = 0;
     let mut found: Vec<PathBuf> = Vec::new();
     let mut frontier = vec![cwd.to_path_buf()];
-    for _ in 0..3 {
+    'discover: for _ in 0..3 {
         let mut next = Vec::new();
         for d in frontier {
+            cg_core::cancel::check_now();
+            if visited >= 128 || std::time::Instant::now() >= deadline {
+                break;
+            }
+            visited += 1;
             let Ok(rd) = std::fs::read_dir(&d) else { continue };
-            for e in rd.flatten() {
+            let mut entries: Vec<_> = rd.take(2048).filter_map(Result::ok).collect();
+            entries.sort_by_key(|e| e.file_name());
+            for e in entries {
+                if std::time::Instant::now() >= deadline {
+                    break;
+                }
                 let p = e.path();
                 let name = e.file_name().to_string_lossy().into_owned();
-                if !p.is_dir() || name.starts_with('.') || matches!(name.as_str(), "node_modules" | "target" | "vendor" | "dist" | "build") {
+                if !e.file_type().ok().is_some_and(|t| t.is_dir())
+                    || name.starts_with('.')
+                    || matches!(name.as_str(), "node_modules" | "target" | "vendor" | "dist" | "build")
+                {
                     continue;
                 }
                 if p.join(brand::DATA_DIR).join("manifest").is_file() {
                     found.push(p);
-                } else {
+                    if found.len() >= 8 {
+                        break 'discover;
+                    }
+                } else if next.len() < 128 {
                     next.push(p);
                 }
             }
         }
         frontier = next;
-        if found.len() >= 8 {
+        if found.len() >= 8 || visited >= 128 || std::time::Instant::now() >= deadline {
             break;
         }
     }
@@ -177,7 +200,8 @@ pub fn run() -> i32 {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&input) else { return 0 };
     let Some(prompt) = v.get("prompt").and_then(|p| p.as_str()).map(str::to_owned) else { return 0 };
     let cwd = v.get("cwd").and_then(|c| c.as_str()).map(PathBuf::from).or_else(|| std::env::current_dir().ok()).unwrap_or_default();
-    let out = std::panic::catch_unwind(|| compute(&prompt, &cwd)).ok().flatten();
+    let deadline = cg_core::cancel::Cancellation::new(std::time::Duration::from_millis(450));
+    let out = std::panic::catch_unwind(|| deadline.run(|| compute(&prompt, &cwd))).ok().flatten();
     if let Some(text) = out {
         use std::io::Write;
         let mut so = std::io::stdout().lock();
@@ -190,6 +214,27 @@ pub fn run() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_skips_filesystem_root_and_directory_symlinks() {
+        #[cfg(unix)]
+        assert!(find_project(Path::new("/"), &[]).is_none());
+        let dir = tempfile::tempdir().unwrap();
+        let indexed = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(indexed.path().join(".cgr")).unwrap();
+        std::fs::write(indexed.path().join(".cgr/manifest"), "{}").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(indexed.path(), dir.path().join("linked")).unwrap();
+            assert!(find_project(dir.path(), &[]).is_none());
+        }
+        let child = dir.path().join("child");
+        std::fs::create_dir_all(child.join(".cgr")).unwrap();
+        std::fs::write(child.join(".cgr/manifest"), "{}").unwrap();
+        let (store, nested) = find_project(dir.path(), &[]).unwrap();
+        assert!(nested);
+        assert_eq!(store.dir, child.join(".cgr"));
+    }
 
     #[test]
     fn system_reminders_are_removed() {

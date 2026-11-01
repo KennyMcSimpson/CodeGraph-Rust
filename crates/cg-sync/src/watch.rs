@@ -1,8 +1,8 @@
 //! File watching (design doc 9.1). One process per project holds `watch.lock` and runs the
 //! watcher; the others poll the lock and take over within a few seconds if the holder dies.
 //! Events are filtered by the indexing rules, debounced adaptively (300 ms of quiet for up to two
-//! files, 2 s for more), and answered with one sync. A change burst of more than 500 files is just
-//! a sync as well: sync always compares the whole tree against the index.
+//! files, 2 s for more), then synced by path. A burst of more than 500 files, a config change
+//! or a lost event triggers a full scan instead.
 
 use crate::sync::{sync, SyncOptions};
 use cg_core::brand;
@@ -27,6 +27,27 @@ pub struct WatchHandle {
 }
 
 impl WatchHandle {
+    /// Stop all projects against one shared deadline, so eight watched projects do not
+    /// multiply shutdown latency. In-progress atomic writes may finish or be abandoned.
+    pub fn stop_all(mut handles: Vec<Self>, wait: Duration) {
+        for h in &handles {
+            h.stop.store(true, Ordering::SeqCst);
+        }
+        let deadline = Instant::now() + wait;
+        loop {
+            for h in &mut handles {
+                if h.thread.as_ref().is_some_and(|t| t.is_finished()) {
+                    if let Some(t) = h.thread.take() {
+                        let _ = t.join();
+                    }
+                }
+            }
+            if handles.iter().all(|h| h.thread.is_none()) || Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
     /// Ask the watcher to stop and wait (up to ~1 s) for it.
     pub fn stop(mut self) {
         self.stop.store(true, Ordering::SeqCst);
@@ -48,7 +69,7 @@ impl Drop for WatchHandle {
     }
 }
 
-fn is_config_name(name: &str) -> bool {
+pub(crate) fn is_config_name(name: &str) -> bool {
     matches!(
         name,
         ".gitignore"
@@ -122,8 +143,6 @@ fn watch_loop(root: PathBuf, opts: SyncOptions, stop: Arc<AtomicBool>) {
             }
         };
         tracing::debug!("watching {}", root.display());
-        // catch up with whatever changed while nobody watched
-        run_sync(&root, &opts);
         run_watch(&root, &opts, &stop);
         drop(guard);
     }
@@ -138,9 +157,13 @@ fn run_sync(root: &Path, opts: &SyncOptions) {
 }
 
 fn run_watch(root: &Path, opts: &SyncOptions, stop: &AtomicBool) {
-    let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+    let (tx, rx) = mpsc::sync_channel::<notify::Result<Event>>(1024);
+    let overflow = Arc::new(AtomicBool::new(false));
+    let over = overflow.clone();
     let watcher = notify::recommended_watcher(move |res| {
-        let _ = tx.send(res);
+        if tx.try_send(res).is_err() {
+            over.store(true, Ordering::Relaxed);
+        }
     });
     let mut watcher = match watcher {
         Ok(w) => Some(w),
@@ -156,39 +179,63 @@ fn run_watch(root: &Path, opts: &SyncOptions, stop: &AtomicBool) {
             degraded = true;
         }
     }
+    // Register first, then catch up: edits made while the initial scan runs must
+    // remain queued rather than falling into a scan/watch registration gap.
+    run_sync(root, opts);
     let mut filter = Filter::new(root);
     let mut dirty: HashSet<PathBuf> = HashSet::new();
+    let mut full_scan = false;
     let mut last_event = Instant::now();
+    let mut burst_started = None;
+    let mut last_maintenance = Instant::now();
     let mut last_scan = Instant::now();
     let store = Store::at(root);
     while !stop.load(Ordering::SeqCst) {
+        if overflow.swap(false, Ordering::Relaxed) {
+            full_scan = true;
+            burst_started.get_or_insert_with(Instant::now);
+        }
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(Ok(ev)) => {
-                if matches!(ev.kind, EventKind::Access(_)) {
-                    continue;
+                if ev.need_rescan() {
+                    full_scan = true;
+                    burst_started.get_or_insert_with(Instant::now);
                 }
-                for p in ev.paths {
-                    if p.file_name().and_then(|n| n.to_str()).is_some_and(is_config_name) {
-                        filter = Filter::new(root);
-                    }
-                    if filter.relevant(&p) {
-                        dirty.insert(p);
-                        last_event = Instant::now();
+                if !matches!(ev.kind, EventKind::Access(_)) {
+                    for p in ev.paths {
+                        if p.file_name().and_then(|n| n.to_str()).is_some_and(is_config_name) {
+                            filter = Filter::new(root);
+                        }
+                        if filter.relevant(&p) {
+                            burst_started.get_or_insert_with(Instant::now);
+                            if dirty.len() < 500 {
+                                dirty.insert(p);
+                            } else {
+                                full_scan = true;
+                            }
+                            last_event = Instant::now();
+                        }
                     }
                 }
             }
             Ok(Err(e)) => {
                 tracing::warn!("watcher error: {e}");
                 degraded = true;
+                full_scan = true;
+                burst_started.get_or_insert_with(Instant::now);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        if !dirty.is_empty() {
+        if !dirty.is_empty() || full_scan {
             let quiet = if dirty.len() <= 2 { QUIET_SMALL } else { QUIET_LARGE };
-            if last_event.elapsed() >= quiet {
+            if last_event.elapsed() >= quiet || burst_started.is_some_and(|t| t.elapsed() >= Duration::from_secs(5)) {
+                let mut local = opts.clone();
+                local.paths = if full_scan { None } else { Some(dirty.drain().collect()) };
                 dirty.clear();
-                run_sync(root, opts);
+                full_scan = false;
+                burst_started = None;
+                run_sync(root, &local);
                 last_scan = Instant::now();
             }
         } else if degraded && last_scan.elapsed() >= FALLBACK_SCAN.min(Duration::from_secs(5)) {
@@ -198,6 +245,14 @@ fn run_watch(root: &Path, opts: &SyncOptions, stop: &AtomicBool) {
             // slow safety net: events can be dropped (inotify queue overflow, network drives)
             run_sync(root, opts);
             last_scan = Instant::now();
+        }
+        if dirty.is_empty() && !full_scan && last_event.elapsed() >= Duration::from_secs(30) && last_maintenance.elapsed() >= Duration::from_secs(30) {
+            if let Ok(report) = crate::compact_if_due(root) {
+                if report.compacted {
+                    tracing::info!("compacted idle snapshot");
+                }
+            }
+            last_maintenance = Instant::now();
         }
         // the index may have been removed (`cgr uninit`): stop watching
         if store.read_manifest().ok().flatten().is_none() {

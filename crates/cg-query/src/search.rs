@@ -401,10 +401,7 @@ impl Graph {
         for (seg, _) in self.layers() {
             if let Some(f) = &seg.tokens_fst {
                 if let Some(r) = f.get(&t.lower) {
-                    let off = &seg.p.token_post_off;
-                    if (r as usize) + 1 < off.len() {
-                        df += (off[r as usize + 1] - off[r as usize]) as usize;
-                    }
+                    df += seg.p.token_df.get(r as usize).copied().unwrap_or(0) as usize;
                 }
             }
         }
@@ -562,7 +559,7 @@ impl Graph {
         let avg = self.graph_avg();
         for w in &words {
             let mut df = 0usize;
-            let mut lists: Vec<(&Seg, bool, &[cg_store::PostEntry], usize)> = Vec::new();
+            let mut lists: Vec<(&Seg, bool, &[u8], usize)> = Vec::new();
             for (seg, d) in self.layers() {
                 let Some(fst) = &seg.tokens_fst else { continue };
                 let Some(rank) = fst.get(w) else { continue };
@@ -571,8 +568,10 @@ impl Graph {
                 if r + 1 >= off.len() {
                     continue;
                 }
-                let list = &seg.p.token_post[off[r] as usize..off[r + 1] as usize];
-                df += list.len();
+                let Some(list) = seg.p.token_post.get(off[r] as usize..off[r + 1] as usize) else {
+                    continue;
+                };
+                df += seg.p.token_df.get(r).copied().unwrap_or(0) as usize;
                 lists.push((seg, d, list, r));
             }
             if df == 0 {
@@ -581,7 +580,8 @@ impl Graph {
             let idf = (1.0 + (n_docs - df as f32 + 0.5) / (df as f32 + 0.5)).ln();
             let n_base = self.view.base.p.nodes_hot.len() as u32;
             for (seg, d, list, _) in lists {
-                for e in list {
+                for e in cg_store::index::TokenPostings::new(list) {
+                    cg_core::cancel::check();
                     if !self.live(e.node, d) {
                         continue;
                     }

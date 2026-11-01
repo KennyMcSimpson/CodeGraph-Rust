@@ -131,7 +131,9 @@ pub fn finish(draft: Draft, input: FinishInput) -> Seg {
     seg.p.tokens_fst = Part::owned(ti.fst);
     seg.p.token_post_off = Part::owned(ti.post_off);
     seg.p.token_post = Part::owned(ti.post);
+    seg.p.token_df = Part::owned(ti.df);
     seg.p.node_norm = Part::owned(ti.node_norm);
+    seg.meta.total_tokens = seg.p.node_norm.iter().map(|n| *n as u64).sum();
     seg.p.filestats = Part::owned(file_stats(&seg));
 
     seg.meta.n_edges = seg.p.out_dst.len() as u32;

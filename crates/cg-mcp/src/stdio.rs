@@ -27,7 +27,7 @@ fn watch_parent(server: Arc<Server>) {
     {
         let original = unsafe { libc::getppid() };
         std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_millis(1000));
+            std::thread::sleep(Duration::from_millis(200));
             if server.is_shutdown() {
                 break;
             }
@@ -68,9 +68,9 @@ pub fn serve_stdio(server: Arc<Server>) -> std::io::Result<()> {
             Err(e) => reply.send(serde_json::json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("Parse error: {e}")}})),
         }
     }
-    // stdin closed: answer what was already accepted (a call is capped at 30 s), then stop the
-    // watcher and release locks
-    server.drain(Duration::from_secs(35));
+    // Give the final small request a chance to answer, then cancel outstanding work and
+    // stop all watchers against a shared deadline. EOF must not wait for a 30 s query.
+    server.drain(Duration::from_millis(200));
     server.shutdown();
     Ok(())
 }

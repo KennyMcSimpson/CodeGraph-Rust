@@ -16,7 +16,7 @@ use crate::detect::{diff_view, Diff};
 use cg_core::budget::MemBudget;
 use cg_core::config::ProjectConfig;
 use cg_core::{brand, CgError, EdgeKind, FileId, NodeIdx, RefKind, Result, StrId, NONE};
-use cg_extract::{extract_stream, fileflags, ExtractConfig, FileBatch};
+use cg_extract::{fileflags, try_extract_stream, ExtractConfig, FileBatch};
 use cg_resolve::driver::{make_edge, round_of, update_of, FNREF_META};
 use cg_resolve::{hooks_for, index_with_guard, resolve_refs, Engine, IndexOptions, Outcome, ProjectInfo, Round_};
 use cg_scan::{scan, ScanOptions};
@@ -26,7 +26,7 @@ use cg_store::{
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -35,11 +35,16 @@ pub struct SyncOptions {
     /// Rebuild the base instead of writing a delta.
     pub force_full: bool,
     pub index: IndexOptions,
+    /// Exact watcher paths. `None` performs a full scan; directory/config/burst events
+    /// conservatively fall back to one. Periodic full scans recover dropped events.
+    pub paths: Option<Vec<PathBuf>>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct SyncReport {
     pub up_to_date: bool,
+    /// A base + delta snapshot was repacked without extracting or resolving source.
+    pub compacted: bool,
     /// Why the base was rebuilt instead of writing a delta.
     pub full_rebuild: Option<String>,
     pub added: usize,
@@ -96,6 +101,107 @@ const MAX_AFFECTED_FILE_PCT: usize = 20;
 /// Merge when the delta covers this much of the project, or after this many syncs (5.7).
 const MERGE_FILE_PCT: usize = 5;
 const MERGE_AFTER_SYNCS: u32 = 200;
+const MERGE_BYTES: u64 = 64 << 20;
+const MERGE_IDLE_MS: u64 = 10 * 60 * 1000;
+const MERGE_QUIET_MS: u64 = 30 * 1000;
+
+fn merge_due(view: &View, manifest: &cg_store::Manifest) -> bool {
+    let Some(delta) = &view.delta else {
+        return false;
+    };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+    let idle = now.saturating_sub(manifest.updated_ms);
+    let files = view.base.p.files.len();
+    idle >= MERGE_QUIET_MS
+        && ((files >= 40 && delta.seg.p.delta_files.len() / 3 * 100 > files * MERGE_FILE_PCT)
+            || manifest.syncs_since_merge >= MERGE_AFTER_SYNCS
+            || delta.seg.file_len >= MERGE_BYTES
+            || idle >= MERGE_IDLE_MS)
+}
+
+fn compact_snapshot(store: &Store, guard: &WriteGuard, view: &View, rep: &mut SyncReport, ph: &mut Phase, budget: MemBudget) -> Result<()> {
+    let pool = cg_resolve::index::indexing_pool(budget, true)?;
+    let seg = pool.install(|| cg_store::compact::compact(view));
+    ph.lap("compact");
+    store.publish_base(&seg, guard)?;
+    ph.lap("write");
+    rep.compacted = true;
+    Ok(())
+}
+
+/// Idle maintenance, called by the elected watcher. This never scans, stats or extracts
+/// source files. An active writer wins immediately; maintenance retries on the next tick.
+pub fn compact_if_due(root: &Path) -> Result<SyncReport> {
+    let store = Store::at(root);
+    let mut rep = SyncReport { up_to_date: true, ..Default::default() };
+    let mut phase = Phase::new();
+    let guard = match store.write_lock(Duration::ZERO) {
+        Ok(guard) => guard,
+        Err(CgError::Lock(_)) => return Ok(rep),
+        Err(e) => return Err(e),
+    };
+    let snapshot = store.open_snapshot()?;
+    if merge_due(&snapshot.view, &snapshot.manifest) {
+        compact_snapshot(&store, &guard, &snapshot.view, &mut rep, &mut phase, MemBudget::detect())?;
+        rep.timings = phase.timings;
+    }
+    Ok(rep)
+}
+
+fn event_paths(root: &Path, view: &View, paths: Option<&[PathBuf]>) -> Option<Vec<String>> {
+    let paths = paths?;
+    if paths.len() > 500 {
+        return None;
+    }
+    let mut rels = Vec::new();
+    for p in paths {
+        let p = if p.is_absolute() { p.strip_prefix(root).ok()?.to_path_buf() } else { p.clone() };
+        if p.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+            return None;
+        }
+        let rel = p.to_str()?.replace('\\', "/");
+        if rel.is_empty() || crate::watch::is_config_name(rel.rsplit('/').next()?) || root.join(&p).is_dir() {
+            return None;
+        }
+        // A removed directory is no longer identifiable with stat.
+        let prefix = format!("{rel}/");
+        if view.files().any(|f| view.file(f).path().starts_with(&prefix)) {
+            return None;
+        }
+        rels.push(rel);
+    }
+    rels.sort();
+    rels.dedup();
+    Some(rels)
+}
+
+fn scan_events(root: &Path, config: &ProjectConfig, view: &View, paths: &[String]) -> Option<Vec<cg_scan::FileEntry>> {
+    let rules = cg_scan::IgnoreRules::new(root, config);
+    let mut entries: BTreeMap<String, cg_scan::FileEntry> = view
+        .files()
+        .map(|f| {
+            let file = view.file(f);
+            let e = cg_scan::FileEntry { rel: file.path().to_owned(), lang: file.lang(), size: file.rec.size as u64, mtime_ns: file.rec.mtime_ns };
+            (e.rel.clone(), e)
+        })
+        .collect();
+    for rel in paths {
+        match cg_scan::stat_entry(&rules, config, rel) {
+            Some(e) => {
+                entries.insert(rel.clone(), e);
+            }
+            None => {
+                // A tracked-but-ignored file can be included by the full scanner's git
+                // supplement; use that scanner rather than silently dropping the file.
+                if entries.contains_key(rel) && root.join(rel).is_file() && rules.is_ignored(rel, false) {
+                    return None;
+                }
+                entries.remove(rel);
+            }
+        }
+    }
+    Some(entries.into_values().collect())
+}
 
 /// Bring the index of `root` up to date.
 pub fn sync(root: &Path, opts: &SyncOptions) -> Result<SyncReport> {
@@ -232,6 +338,7 @@ fn hierarchy_keys(view: &View, pairs: impl Iterator<Item = (NodeIdx, NodeIdx)>) 
 pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOptions) -> Result<SyncReport> {
     let mut rep = SyncReport::default();
     let mut ph = Phase::new();
+    let budget = MemBudget::configured(opts.index.memory_mb, opts.index.threads);
 
     let snap = match store.open_snapshot() {
         Ok(s) => s,
@@ -248,7 +355,11 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
     }
 
     let config = ProjectConfig::load(root);
-    let project = ProjectInfo::load(root, &config);
+    let paths = event_paths(root, &snap.view, opts.paths.as_deref());
+    let project = match &paths {
+        Some(_) => ProjectInfo::load_known(root, &base.meta.config_digests.keys().cloned().collect::<Vec<_>>()),
+        None => ProjectInfo::load(root, &config),
+    };
     if base.meta.config_digest != config.digest() {
         return full_rebuild(store, guard, root, opts, rep, "project configuration changed".into());
     }
@@ -259,16 +370,19 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
     // ---- 1. diff ----
     let mut sopts = ScanOptions::new(root);
     sopts.config = config.clone();
-    let scanned = scan(&sopts);
+    let entries = paths.as_ref().and_then(|p| scan_events(root, &config, &snap.view, p)).unwrap_or_else(|| scan(&sopts).files);
     ph.lap("scan");
-    let current = diff_view(&snap.view, root, &scanned.files);
+    let current = diff_view(&snap.view, root, &entries);
     if current.is_empty() {
+        if merge_due(&snap.view, &manifest) {
+            compact_snapshot(store, guard, &snap.view, &mut rep, &mut ph, budget)?;
+        }
         rep.up_to_date = true;
         rep.timings = ph.timings;
         return Ok(rep);
     }
     let base_view = View::new(base.clone()).with_root(root.to_path_buf());
-    let d: Diff = diff_view(&base_view, root, &scanned.files);
+    let d: Diff = diff_view(&base_view, root, &entries);
     ph.lap("diff");
     if d.is_empty() {
         // the tree equals the base again
@@ -282,21 +396,9 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
     rep.removed = d.removed.len();
     rep.touched = d.touched.len();
     let n_base_files = base.p.files.len();
-    if d.changed() * 100 > n_base_files * MERGE_FILE_PCT.max(1) && n_base_files >= 40 {
-        let why = format!("{} changed files exceed {MERGE_FILE_PCT}% of the project (merge)", d.changed());
-        return full_rebuild(store, guard, root, opts, rep, why);
-    }
-    if manifest.syncs_since_merge >= MERGE_AFTER_SYNCS {
-        return full_rebuild(store, guard, root, opts, rep, format!("{MERGE_AFTER_SYNCS} syncs since the last merge"));
-    }
 
     // ---- 2. re-extract the changed files ----
-    let mut budget = MemBudget::detect();
-    if let Some(t) = opts.index.threads {
-        budget.threads = t.max(1);
-    }
-    let pool =
-        rayon::ThreadPoolBuilder::new().num_threads(budget.threads).stack_size(16 << 20).build().map_err(|e| CgError::other(format!("thread pool: {e}")))?;
+    let pool = cg_resolve::index::indexing_pool(budget, opts.index.low_priority)?;
     let replaced_ids: FxHashMap<&str, FileId> = d.replaced.iter().map(|(f, e)| (e.rel.as_str(), *f)).collect();
     let mut entries: Vec<_> = d.replaced.iter().map(|x| x.1.clone()).chain(d.added.iter().cloned()).collect();
     entries.sort_by(|a, b| a.rel.as_bytes().cmp(b.rel.as_bytes()));
@@ -305,17 +407,25 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
     xcfg.batch_bytes = budget.extract_batch_bytes();
     xcfg.overrides = config.extensions.clone();
     xcfg.low_priority = opts.index.low_priority;
-    xcfg.hooks = hooks_for(&project);
+    xcfg.set_hooks(hooks_for(&project));
     let deprio = cg_resolve::index::deprioritize_matcher(root, &config);
     let mut extracted: Vec<Option<FileBatch>> = (0..entries.len()).map(|_| None).collect();
-    extract_stream(&entries, &xcfg, |i, b| {
+    let mut resident = 0u64;
+    let spill_dir = root.join(brand::DATA_DIR).join("tmp");
+    try_extract_stream(&entries, &xcfg, |i, b| {
         if let Some(mut b) = b {
             if deprio.as_ref().is_some_and(|g| g.matched_path_or_any_parents(&entries[i].rel, false).is_ignore()) {
                 b.flags |= fileflags::DEPRIORITIZED;
             }
+            resident += cg_extract::spill::resident_bytes(&b);
             extracted[i] = Some(b);
+            if resident >= budget.extract / 2 {
+                cg_extract::spill::spill(extracted.iter_mut().filter_map(Option::as_mut), &spill_dir)?;
+                resident = 0;
+            }
         }
-    });
+        Ok::<_, std::io::Error>(())
+    })?;
     ph.lap("extract");
 
     let mut batches: Vec<FileBatch> = Vec::new();
@@ -348,7 +458,7 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
         let r = &base.p.files[f.idx()];
         dead_nodes.extend(r.node_start.0..r.node_start.0 + r.node_count);
     }
-    let c_files: FxHashSet<u32> = replaced.iter().chain(removed.iter()).map(|f| f.0).collect();
+    let c_files: FxHashSet<u32> = ids.iter().chain(removed.iter()).map(|f| f.0).collect();
 
     // ---- provisional delta -> resolution engine over the new state ----
     let bb = base_offsets(&base);
@@ -380,7 +490,7 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
     let v1_seg = assemble_delta(&base, provisional(&draft, false));
     let view1 = base_view.with_delta(Arc::new(v1_seg))?;
     ph.lap("draft");
-    let mut engine = Engine::build(&view1, &project);
+    let mut engine = pool.install(|| Engine::build_with_budget(&view1, &project, budget));
     ph.lap("tables");
 
     // ---- 3. affected references ----
@@ -394,11 +504,13 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
     }
     // definition / export differences of replaced, new and removed files
     let mut d_names: BTreeSet<String> = BTreeSet::new();
+    let mut definitions_changed = false;
     let mut export_changed: Vec<FileId> = Vec::new();
     let mut remap: FxHashMap<u32, u32> = FxHashMap::default();
     for (i, f) in ids.iter().enumerate() {
         let old = if states[i] == DeltaState::Replaced { defs_of(&base_view, *f) } else { BTreeMap::new() };
         let new = defs_of(&view1, *f);
+        definitions_changed |= old != new;
         for (k, details) in &new {
             if (old.get(k) != Some(details)) && !old.contains_key(k) {
                 d_names.insert(k.name.clone());
@@ -643,7 +755,15 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
     ph.lap("resolve");
 
     // ---- synthesised edges: recomputed over the new state, compared with the base ----
-    let synth = cg_resolve::synth::run_all(&engine);
+    let synth = pool.install(|| {
+        cg_resolve::synth::run_incremental(
+            &engine,
+            &base_view,
+            &c_files,
+            &remap,
+            hierarchy_changed || definitions_changed || !export_changed.is_empty() || hit_imports > 0 || !removed.is_empty(),
+        )
+    });
     let mut synth_by_file: FxHashMap<u32, Vec<usize>> = FxHashMap::default();
     for (i, e) in synth.edges.iter().enumerate() {
         synth_by_file.entry(view1.hot(NodeIdx(e.src)).file.0).or_default().push(i);
@@ -894,6 +1014,8 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
     let mut delta = assemble_delta(&base, parts);
     delta.meta.n_edges = base.meta.n_edges - dropped_edges + delta.p.out_dst.len() as u32;
     ph.lap("assemble");
+    // Publishing a source edit never waits for compaction. The quiet-period maintenance
+    // repacks this snapshot later, under the same writer lock.
     store.publish_delta(&delta, guard)?;
     ph.lap("write");
     rep.timings = ph.timings;

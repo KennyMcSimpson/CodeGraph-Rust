@@ -21,9 +21,16 @@ expect() { # expect <haystack> <needle> <what>
 # run a command with a time limit, without relying on GNU `timeout` (absent on macOS runners)
 run_limited() { # run_limited <seconds> <cmd...>
   local limit="$1"; shift
-  "$@" &
+  # Background jobs otherwise inherit /dev/null as stdin in a non-interactive shell.
+  "$@" <&0 &
   local pid=$!
-  ( sleep "$limit"; kill -9 "$pid" 2>/dev/null ) &
+  (
+    sleep "$limit" &
+    local sleeper=$!
+    trap 'kill "$sleeper" 2>/dev/null || true; exit 0' TERM INT
+    wait "$sleeper"
+    kill -9 "$pid" 2>/dev/null
+  ) </dev/null >/dev/null 2>&1 &
   local killer=$!
   local rc=0
   wait "$pid" || rc=$?
@@ -125,7 +132,7 @@ out="$(printf '{"prompt":"how does greet call format?","cwd":"%s"}' "$DIR" | "$B
 echo "(hook output: ${#out} bytes)"
 # broken input and a directory without an index must not fail either
 printf 'not json' | "$BIN" prompt-hook >/dev/null || fail "prompt-hook must exit 0 on garbage"
-( cd / && printf '{"prompt":"x","cwd":"/"}' | "$BIN" prompt-hook >/dev/null ) || fail "prompt-hook must exit 0 without an index"
+( cd / && printf '{"prompt":"x","cwd":"/"}' | run_limited 3 "$BIN" prompt-hook >/dev/null ) || fail "prompt-hook must exit 0 without an index"
 
 echo "== export"
 if "$BIN" export --sqlite "$DIR/graph.sqlite" >/dev/null 2>&1; then

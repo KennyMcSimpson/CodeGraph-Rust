@@ -77,6 +77,39 @@ pub fn resolve_refs<'e, 'v>(e: &'e Engine<'v>, files: &[FileId], round: Round_, 
     parts.into_iter().flatten().collect()
 }
 
+/// Full builds write directly into disjoint file ranges in the final outcome array. There
+/// is no per-file result vector followed by a flattened round vector and another copy.
+fn resolve_into(e: &Engine<'_>, files: &[FileId], round: Round, outcomes: &mut [Outcome]) {
+    let mut files = files.to_vec();
+    files.sort_unstable_by_key(|f| e.view.ref_range(*f).start);
+    let mut jobs = Vec::with_capacity(files.len());
+    let mut remaining = outcomes;
+    let mut cursor = 0usize;
+    for f in files {
+        let range = e.view.ref_range(f);
+        if range.is_empty() {
+            continue;
+        }
+        let (_, rest) = remaining.split_at_mut(range.start as usize - cursor);
+        let (slots, rest) = rest.split_at_mut(range.len());
+        jobs.push((f, slots));
+        remaining = rest;
+        cursor = range.end as usize;
+    }
+    jobs.into_par_iter().for_each_init(WorkerCx::new, |wcx, (file, slots)| {
+        let refs = e.view.refs_of_file(file);
+        if !refs.iter().any(|r| in_round(r.kind, round)) {
+            return;
+        }
+        let cx = FileCx::new(e, file);
+        for (slot, reference) in slots.iter_mut().zip(refs) {
+            if in_round(reference.kind, round) {
+                *slot = cx.resolve_ref(wcx, reference);
+            }
+        }
+    });
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Round_ {
     One,
@@ -161,16 +194,18 @@ pub fn resolve_all(e: &mut Engine<'_>) -> ResolveOutput {
     let files: Vec<FileId> = view.files().collect();
     let mut outcomes = vec![Outcome::PENDING; n_refs];
 
-    let r1 = resolve_refs(e, &files, Round_::One, None);
-    let pairs = hierarchy_pairs(e, &r1);
+    resolve_into(e, &files, Round::One, &mut outcomes);
+    let pairs = outcomes
+        .iter()
+        .enumerate()
+        .filter_map(|(id, o)| {
+            let r = view.reference(id as u32);
+            (o.status == status::RESOLVED && matches!(RefKind::from_wire(r.kind), Some(RefKind::Edge(EdgeKind::Extends | EdgeKind::Implements))))
+                .then_some((r.from, NodeIdx(o.target)))
+        })
+        .collect::<Vec<_>>();
     e.set_hierarchy(pairs.into_iter());
-    for (id, o) in &r1 {
-        outcomes[*id as usize] = *o;
-    }
-    let r2 = resolve_refs(e, &files, Round_::Two, None);
-    for (id, o) in &r2 {
-        outcomes[*id as usize] = *o;
-    }
+    resolve_into(e, &files, Round::Two, &mut outcomes);
 
     let mut edges = Vec::new();
     for (id, o) in outcomes.iter().enumerate() {

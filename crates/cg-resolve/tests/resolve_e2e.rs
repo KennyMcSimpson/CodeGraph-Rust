@@ -21,6 +21,21 @@ fn has(edges: &[String], needle: &str) -> bool {
 }
 
 #[test]
+fn parallel_event_keys_and_resolution_are_byte_deterministic() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..80 {
+        let source = format!("export function handler{i}() {{}}\nexport function fire{i}() {{ bus.emit('event{i}'); }}\nbus.on('event{i}', handler{i});\n");
+        std::fs::write(dir.path().join(format!("file{i}.ts")), source).unwrap();
+    }
+    let build = |threads| build_seg(dir.path(), &IndexOptions { threads: Some(threads), memory_mb: Some(2048), ..Default::default() }).unwrap();
+    let sequential = build(1);
+    let parallel = build(4);
+    assert_eq!(sequential.seg.to_bytes(), parallel.seg.to_bytes(), "all partitions and metadata must be independent of scheduling");
+    let view = View::new(Arc::new(parallel.seg));
+    assert_eq!(dump::canonical(&view).iter().filter(|line| line.contains("event-emitter")).count(), 80);
+}
+
+#[test]
 fn typescript_imports_classes_and_receivers() {
     let (_d, view) = project(&[
         ("src/service.ts", "export class Service { run(): void {} }\nexport function helper() {}\n"),

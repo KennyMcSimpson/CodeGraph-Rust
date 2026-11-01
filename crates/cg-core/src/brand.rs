@@ -19,7 +19,7 @@ pub const CONFIG_FILE: &str = "cgr.json";
 /// marks older indexes as "built by an older engine" (design doc 5.8).
 pub const ENGINE_VERSION: u32 = 1;
 /// Version of the on-disk segment format; a mismatch forces a full rebuild.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 /// The upstream commit whose kernel is vendored (see crates/cg-kernel/UPSTREAM_COMMIT).
 pub const UPSTREAM_KERNEL_COMMIT: &str = include_str!("../../cg-kernel/UPSTREAM_COMMIT");
 

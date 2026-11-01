@@ -1,6 +1,7 @@
 //! cg-store: the immutable snapshot format and everything that reads or writes it.
 
 pub mod build;
+pub mod compact;
 pub mod delta;
 pub mod dump;
 pub mod edges;
