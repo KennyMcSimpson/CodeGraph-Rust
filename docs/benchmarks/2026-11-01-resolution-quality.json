@@ -1,5 +1,5 @@
 {
-  "dateUtc": "2026-11-01T11:17:18.318943+00:00",
+  "dateUtc": "2026-11-01T11:34:36.180799+00:00",
   "baselineCommit": "9c610ba3d99e1d18e5e0595b6268af1a0e85a03c",
   "upstreamCommit": "d2e0389b519be398f9bc616b6f7bea8a7edfbc6a",
   "comparisonKey": [
@@ -13,14 +13,14 @@
   "allEdgesIncluded": true,
   "upstreamIsSemanticGroundTruth": false,
   "beforeBinarySha256": "47f134691da3eec3ee60a444d86ce22dc8e0b5dc2a0e8d7f35c447e0dc2de171",
-  "afterBinarySha256": "724d46024a032c626172c4137e9e89181c7d109cbb7fbaa421f52e79e91ea161",
+  "afterBinarySha256": "3a4b08edcd2e447f4af77416ece3d288351c316f3175b0460e3aea193eb2f3b0",
   "engineVersion": 3,
   "formatVersion": 2,
   "newPerformanceBenchmark": false,
   "checks": {
-    "focusedBefore": 16,
-    "focusedAfter": 35,
-    "focusedTotal": 35,
+    "focusedBefore": 18,
+    "focusedAfter": 40,
+    "focusedTotal": 40,
     "workspacePassed": 137,
     "workspaceIgnored": 1,
     "randomEditSequences": 6,
@@ -969,7 +969,7 @@
       "corpusCommit": "a05e16a7230fe33d3f43f4a3aaed103cebb42efc"
     }
   ],
-  "runtimeCommit": "34c00243d1f6a7d65908682f1fa494ca9e4b8cf1",
+  "runtimeCommit": "d45151d92172c42bdaae6451c4735fca01c5c847",
   "rustCompiler": "rustc 1.94.1 (e408947bf 2026-03-25)",
   "vendoredKernelBase": "9d3abb843a84d7610bf987bda7a1db4a6fe3eee3"
 }

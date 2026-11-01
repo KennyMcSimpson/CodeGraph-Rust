@@ -6,7 +6,7 @@
 主要缺口位于自研的 facts、模块解析、类型传播及框架层。四个仓库的非路由节点身份
 在修复前后均与上游完全一致；问题并不是 Rust 语法提取器整体提取不出符号。
 
-修复运行时：`34c0024`，引擎规则版本从 **2 升到 3**，存储格式仍为 **2**。
+修复运行时：`d45151d`，引擎规则版本从 **2 升到 3**，存储格式仍为 **2**。
 基线为 `9c610ba`，其运行时代码与之前性能复测的 `b827b1d` 相同。
 上游仍固定为 `d2e0389b519be398f9bc616b6f7bea8a7edfbc6a`，package 版本 1.6.2。
 未更换上游版本、仓库快照、包含范围或比较键。
@@ -24,7 +24,8 @@
 后者导出 `createApplication`；这条链断开，直接导致 **678 次 `express()` 调用漏连**。
 
 现在在语法 facts 中记录这些导出，并沿原有、有深度上限的导出闭包解析。
-调用 CommonJS 模块时使用其默认导出，成员访问则使用成员导出。
+调用 CommonJS 模块时使用其模块值，成员访问则使用成员导出。
+模块值、ES 默认导出和名为 `default` 的对象属性分别处理，避免把仅含 `default` 属性的对象误当作可调用函数。
 ES namespace import 不会因此被当作可调用的默认函数。
 未导出的 JS 私有函数不再作为模块成员的后备答案，缺失的显式 JS 导入也不会继续
 退化成全项目同名匹配。显式声明的 `module` / `exports` 局部变量会阻止相应的导出事实。
@@ -139,7 +140,7 @@ NULL 位置保持 NULL，包含全部边、路由、包含关系和有提取错�
 
 ## 验证与剩余工作
 
-- 35 项仓库外定向语义检查：旧版通过 16 项，修复版通过 **35 项**，包含正例与拒绝误连的负例。
+- 40 项仓库外定向语义检查：旧版通过 18 项，修复版通过 **40 项**，包含正例与拒绝误连的负例。
 - 现有工作区测试：**137 通过，1 项原有 ignored**；随机编辑按 6 组 × 100 次执行。
 - 四个真实仓库共 **24 项**检查：初始完整比较、编辑后同步与完整比较、还原后同步与完整比较、严格索引校验。
 - 成员别名变更的增量复现、旧规则版本索引升级均通过。
@@ -158,9 +159,11 @@ The low agreement exposed both real resolver defects and differences between gra
 Non-route symbol identities already matched upstream completely; most gaps were in the
 Rust implementation's facts, export/module resolution, type propagation and framework rules.
 
-Runtime commit **`34c0024`** fixes callable CommonJS exports and re-exports, enforces JS
+Runtime commit **`d45151d`** fixes callable CommonJS exports and re-exports, enforces JS
 export boundaries, distinguishes assigned property names from internal function names,
-and constrains member lookup using receiver evidence. Rust fixes select the declared Cargo
+and constrains member lookup using receiver evidence. The module value is tracked separately
+from ES default exports and object properties named `default`, so exporting an object does not
+make the module callable. Rust fixes select the declared Cargo
 root, isolate auxiliary targets, resolve qualified type paths and value/module name collisions,
 recover conditional-wrapper export facts, and preserve raw return annotations for bounded
 call-chain and standard Result/Option inference. Framework detection recognizes a framework's
@@ -175,7 +178,7 @@ node identities still match. P/R describe agreement with this upstream version, 
 semantic ground truth. Gin's relative P declines partly because cgr now emits route containment
 edges absent from upstream. The original global 97%/95% agreement gate is **not fully met**.
 
-Validation: **35/35** external focused checks, **137** existing workspace tests passed with
+Validation: **40/40** external focused checks, **137** existing workspace tests passed with
 one existing ignored test, **600** random edit steps, **24** checks across four real repositories,
 an independently checked SQL intersection for every graph, and the targeted incremental alias
 and old-engine upgrade checks. Release build, strict Clippy and formatting pass. Engine version
