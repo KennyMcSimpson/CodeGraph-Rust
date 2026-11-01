@@ -17,7 +17,17 @@ fn u16_at(b: &[u8], at: usize) -> u16 {
 /// One file's tables.
 #[derive(Clone, Copy)]
 pub struct FileRows<'a> {
-    pub emit: &'a EmitOut,
+    pub emit: TableSlices<'a>,
+}
+
+/// Kernel ABI buffers, borrowed either from the worker output or an immutable spill map.
+#[derive(Clone, Copy)]
+pub struct TableSlices<'a> {
+    pub meta: &'a [u8],
+    pub nodes: &'a [u8],
+    pub edges: &'a [u8],
+    pub refs: &'a [u8],
+    pub arena: &'a [u8],
 }
 
 #[inline]
@@ -27,25 +37,28 @@ fn opt_u32(v: u32) -> Option<u32> {
 
 impl<'a> FileRows<'a> {
     pub fn new(emit: &'a EmitOut) -> Self {
+        Self::from_slices(TableSlices { meta: &emit.meta, nodes: &emit.nodes, edges: &emit.edges, refs: &emit.refs, arena: &emit.arena })
+    }
+    pub fn from_slices(emit: TableSlices<'a>) -> Self {
         debug_assert!(emit.meta.len() >= META_SIZE);
         FileRows { emit }
     }
     pub fn node_count(&self) -> usize {
-        u32_at(&self.emit.meta, 4) as usize
+        u32_at(self.emit.meta, 4) as usize
     }
     pub fn edge_count(&self) -> usize {
-        u32_at(&self.emit.meta, 8) as usize
+        u32_at(self.emit.meta, 8) as usize
     }
     pub fn ref_count(&self) -> usize {
-        u32_at(&self.emit.meta, 12) as usize
+        u32_at(self.emit.meta, 12) as usize
     }
     /// JSON array of extraction errors, if any were recorded.
     pub fn errors_json(&self) -> Option<&'a str> {
-        let off = u32_at(&self.emit.meta, 20);
+        let off = u32_at(self.emit.meta, 20);
         if off == NONE {
             return None;
         }
-        let len = u32_at(&self.emit.meta, 24) as usize;
+        let len = u32_at(self.emit.meta, 24) as usize;
         self.s(off, len as u32)
     }
 

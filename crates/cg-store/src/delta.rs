@@ -206,7 +206,7 @@ pub fn assemble_delta(base: &Seg, parts: DeltaParts) -> Seg {
         seg.p.tri_keys = Part::owned(ni.tri_keys);
         seg.p.tri_off = Part::owned(ni.tri_off);
         seg.p.tri_post = Part::owned(ni.tri_post);
-        let slot: FxHashMap<u32, usize> = seg.p.delta_files.chunks_exact(3).enumerate().map(|(i, t)| (t[0], i)).collect();
+        let slot: FxHashMap<u32, usize> = seg.p.delta_files.as_chunks::<3>().0.iter().enumerate().map(|(i, t)| (t[0], i)).collect();
         let ti = index::build_token_index(&TokenInputs {
             hot: &seg.p.nodes_hot,
             cold: &seg.p.nodes_cold,
@@ -223,6 +223,7 @@ pub fn assemble_delta(base: &Seg, parts: DeltaParts) -> Seg {
         seg.p.tokens_fst = Part::owned(ti.fst);
         seg.p.token_post_off = Part::owned(ti.post_off);
         seg.p.token_post = Part::owned(ti.post);
+        seg.p.token_df = Part::owned(ti.df);
         seg.p.node_norm = Part::owned(ti.node_norm);
     }
 

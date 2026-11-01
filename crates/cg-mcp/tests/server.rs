@@ -159,3 +159,25 @@ fn project_path_selects_another_index() {
     assert!(text_of(&out.by_id(8).unwrap()).contains("only_in_second"));
     assert!(!text_of(&out.by_id(9).unwrap()).contains("def only_in_second"), "the default project must not see the other index");
 }
+
+#[test]
+fn project_lru_evicts_the_corresponding_watcher_resource() {
+    let dirs: Vec<_> = (0..9).map(|_| project()).collect();
+    let (server, _) = server_for(dirs[0].path(), None);
+    let watched = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+    let opened = watched.clone();
+    server.set_open_hook(Arc::new(move |root| {
+        opened.lock().unwrap().insert(root.to_path_buf());
+    }));
+    let closed = watched.clone();
+    server.set_close_hook(Arc::new(move |root| {
+        closed.lock().unwrap().remove(root);
+    }));
+    for dir in &dirs {
+        server.preopen(dir.path());
+        assert!(watched.lock().unwrap().len() <= 8);
+    }
+    assert_eq!(watched.lock().unwrap().len(), 8);
+    assert!(!watched.lock().unwrap().contains(dirs[0].path()));
+    server.shutdown();
+}

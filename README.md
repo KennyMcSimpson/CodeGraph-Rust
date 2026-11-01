@@ -98,6 +98,22 @@ New-process CLI measurements include startup. The warm-query P50 speedup geometr
 **5.85×**. These measurements cover repository analysis and retrieval; no LLM task-completion
 or token-savings benchmark was run.
 
+### Performance engineering update
+
+The next engine update adds event-path synchronization, source-free snapshot compaction after
+a quiet period, extraction-buffer spill to temporary mappings, preallocated resolution outcomes,
+fused hook scanning, selective/parallel event synthesis, compressed BM25 postings and adaptive
+radix edge sorting. Query source windows use one bounded text buffer with lazy line offsets.
+MCP now has bounded admission, cooperative cancellation and bounded project/watcher resources;
+prompt-hook discovery and the smoke helper's stdin/timer handling have been fixed.
+
+These changes use **snapshot format 2**. Run `cgr index /path/to/project` to rebuild an old index.
+The historical speedups above still refer to `fcc59af`. A new guarded benchmark was refused
+because available memory and swap did not meet the design's prerequisites, so this update has
+no additional measured speedup claim. See the bilingual
+[implementation and validation record](docs/PERFORMANCE-IMPLEMENTATION.md) for exact changes,
+resource readings and remaining work.
+
 ## Installation
 
 ### Build and install from source
@@ -371,7 +387,7 @@ flags for downstream ranking and analysis.
 | Variable | Behavior |
 |---|---|
 | `CGR_THREADS` | Indexing worker count; the detected memory budget can reduce it |
-| `CGR_MEMORY_MB` | Memory tuning budget for worker/batch sizing; not a hard process RSS limit |
+| `CGR_MEMORY_MB` | Tuning budget for workers, batches, kernel spill and resolver caches; not an RSS cap |
 | `CGR_MCP_TOOLS` | Comma-separated list of exposed MCP tools; `CODEGRAPH_MCP_TOOLS` is a fallback |
 | `CGR_EXPLORE_DEDUP=1` | Skip source already returned in the same durable MCP conversation |
 | `CGR_NO_PROMPT_HOOK=1` | Disable the optional Claude Code prompt hook at runtime |
@@ -398,8 +414,9 @@ the manifest; readers retain a stable snapshot, with shared locks protecting fil
 
 Incremental updates compare timestamps/sizes and content hashes, extract changed files, then
 re-resolve references affected by changed definitions, imports, exports or hierarchy. One delta
-is computed against the base; deltas do not accumulate as an unbounded stack. Thresholds merge
-or rebuild the graph when a change becomes too broad. The correctness target is that the
+is computed against the base; deltas do not accumulate as an unbounded stack. Quiet-period
+compaction rewrites the live snapshot without re-extraction; broad reference changes or config
+changes can still rebuild the graph. The correctness target is that the
 incremental view equals a fresh full build, checked by canonical graph comparisons.
 
 | Crate | Responsibility |
@@ -463,12 +480,19 @@ compares the current graph with a fresh full build. The benchmark wrapper adds m
 and swap preflight checks and process-tree monitoring; its prerequisites may require closing
 other applications before a run.
 
-The 2026-11-01 local validation passed **116 tests, with one ignored**, and incremental/full
-comparisons on all four benchmark repositories. This records that local revision's result;
-Linux/Windows runs and current hosted CI were not verified in that measurement.
+The performance implementation update passed **137 tests, with one ignored**, on macOS,
+plus release compilation, Clippy, formatting and the CLI/MCP/hook smoke test. All four real
+projects passed full/edit/restore graph equivalence and matched the prior engine's graph dumps.
+The historical benchmark revision passed 116 tests. Current verification details and the benchmark preflight refusal are in
+[the implementation record](docs/PERFORMANCE-IMPLEMENTATION.md). Linux/Windows runtime checks
+and hosted CI results are separate from this local validation.
+
+Code revision `f82506e` passed all nine [hosted CI checks](https://github.com/NianJiuZst/CodeGrap-Rust/actions/runs/41286327676),
+including Linux/macOS/Windows tests and end-to-end smoke, lint, kernel reproducibility and the
+static Linux build. Hosted correctness results are not used as performance measurements.
 
 The CI configuration includes formatting, Clippy, kernel reproducibility, multi-platform tests
-and release-build checks. The existing smoke helper has known issues described below.
+and release-build checks. The smoke helper covers the CLI, MCP handshake and prompt hook.
 To refresh the kernel, use `scripts/sync-kernel.sh <upstream-checkout> <commit>` and verify the
 resulting patches and extraction tests. Vendored formatting is kept separate from workspace
 formatting checks.
@@ -479,16 +503,16 @@ formatting checks.
   explore responses differ from upstream. The benchmark has a per-repository coverage table.
 - **Static-analysis limits:** ambiguity can leave references unresolved; dynamic behavior is
   covered only by implemented patterns. Inspect important call paths before relying on them.
-- **Memory tuning:** `CGR_MEMORY_MB` sizes some resources but does not bound all accumulated
-  extraction results or resolution tables. Large repositories can exceed that value.
-- **Prompt-hook discovery:** the optional hook can scan broadly when started in an unindexed
-  directory. A root-directory probe was stopped after 88 seconds. Use `install --no-hook` or
-  `CGR_NO_PROMPT_HOOK=1` when relying on CLI/MCP retrieval without this hook.
-- **MCP execution budget:** a timeout response does not cancel a query already running in the
-  worker pool. The current service should not be treated as a hard-isolated query executor.
-- **Smoke helper:** `scripts/smoke.sh` currently loses stdin for its background MCP command,
-  and its timer can retain the output pipe. Direct-stdin MCP validation passed; the helper's
-  failed run is recorded in the benchmark notes.
+- **Memory tuning:** kernel-buffer spill and resolver cache limits release heap memory, but
+  facts, graph builders and shared tables still scale with repository size. The tuning budget
+  does not enforce a process RSS cap.
+- **Incremental scope:** filesystem event probing is local, but inventory assembly and the
+  base-relative delta still do broader in-memory work. Structural changes can trigger wider
+  resolution/synthesis; background compaction with delta rebasing remains M6 work.
+- **Execution deadlines:** query/hook cancellation is cooperative; a blocking filesystem call
+  cannot be forcibly interrupted by the worker deadline.
+- **New performance targets:** the latest optimizations have correctness coverage; their
+  throughput, P95/P99 latency and large-repository RSS still need a new guarded measurement.
 
 ## Contributing
 

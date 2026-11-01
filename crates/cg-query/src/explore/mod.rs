@@ -124,15 +124,9 @@ impl Graph {
         (rec.rec.size as u64, rec.rec.mtime_ns)
     }
 
-    fn read_lines(&self, f: FileId) -> Option<Vec<String>> {
+    fn read_lines(&self, f: FileId) -> Option<crate::source::SourceView> {
         let abs = self.abs_path(self.path(f))?;
-        let bytes = std::fs::read(abs).ok()?;
-        let text = String::from_utf8_lossy(&bytes);
-        let mut lines: Vec<String> = text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l).to_owned()).collect();
-        if lines.last().is_some_and(|l| l.is_empty()) {
-            lines.pop();
-        }
-        Some(lines)
+        crate::source::SourceView::read(&abs, 1 << 20).ok()
     }
 
     /// Run the explore pipeline for `query`.
@@ -423,7 +417,7 @@ impl Graph {
                     }
                 } else {
                     for (n, s) in &listed {
-                        let must = exact.contains(n) || flow.path_nodes.contains(n) || (grp.pinned.is_some() && pinned_nodes.contains(n) && false);
+                        let must = exact.contains(n) || flow.path_nodes.contains(n);
                         ctx.for_node(*n, *s, must, &mut wants);
                     }
                     for a in &grp.anchors {

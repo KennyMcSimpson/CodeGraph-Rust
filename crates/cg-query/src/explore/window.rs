@@ -122,13 +122,14 @@ pub fn range_cost(cost: &[u32], a: u32, b: u32) -> usize {
     (cost[b] - cost[a - 1]) as usize
 }
 
-pub fn line_costs(lines: &[String]) -> Vec<u32> {
+pub fn line_costs(lines: &crate::source::SourceView) -> Vec<u32> {
     let mut cost = Vec::with_capacity(lines.len() + 1);
     cost.push(0u32);
     let mut acc = 0u32;
-    for (i, l) in lines.iter().enumerate() {
+    for i in 0..lines.len() {
+        cg_core::cancel::check();
         let digits = ((i + 1) as f64).log10().floor() as u32 + 1;
-        acc += l.len() as u32 + digits + 2;
+        acc += lines[i].len() as u32 + digits + 2;
         cost.push(acc);
     }
     cost
@@ -170,7 +171,7 @@ pub fn plan(wants: Vec<Want>, gap: u32, cost: &[u32], cap: usize) -> Vec<Range> 
 
 /// Render ranges as `<n>\t<line>` blocks joined by gap markers (named when the hole holds
 /// indexed symbols).
-pub fn render(g: &Graph, f: cg_core::FileId, lines: &[String], ranges: &[Range]) -> String {
+pub fn render(g: &Graph, f: cg_core::FileId, lines: &crate::source::SourceView, ranges: &[Range]) -> String {
     let mut out = String::new();
     let mut prev_end: Option<u32> = None;
     // symbols for named gaps

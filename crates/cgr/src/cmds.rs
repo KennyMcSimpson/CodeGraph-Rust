@@ -55,6 +55,7 @@ pub fn index(path: Option<PathBuf>, _force: bool, quiet: bool, timings: bool, re
                 "files": report.files, "nodes": report.nodes, "edges": report.edges, "refs": report.refs, "resolved": report.resolved_refs,
                 "totalMs": report.total().as_secs_f64() * 1e3, "peakRssMb": report.peak_rss_mb, "threads": report.threads,
                 "sourceMb": report.source_bytes / (1 << 20), "segmentMb": report.segment_bytes / (1 << 20), "phasesMs": phases,
+                "spilledKernelBytes": report.spilled_kernel_bytes, "budgetMb": report.budget_mb,
             })
         );
         return Ok(0);
@@ -430,11 +431,15 @@ pub fn serve(base: Option<PathBuf>, http: Option<String>, token: Option<String>,
             }
         }));
         let w = watchers.clone();
+        server.set_close_hook(std::sync::Arc::new(move |root: &Path| {
+            // Dropping requests a stop without holding the project-cache lock or delaying
+            // the next query while an index write finishes.
+            w.lock().unwrap_or_else(|e| e.into_inner()).remove(root);
+        }));
+        let w = watchers.clone();
         server.on_shutdown(Box::new(move || {
             let handles: Vec<_> = w.lock().unwrap_or_else(|e| e.into_inner()).drain().map(|(_, h)| h).collect();
-            for h in handles {
-                h.stop();
-            }
+            cg_sync::WatchHandle::stop_all(handles, std::time::Duration::from_millis(600));
         }));
         // watch the default project from the start
         let start = std::env::var_os("CGR_WATCH_ROOT").map(PathBuf::from).or_else(|| cfg_path.clone()).or_else(|| std::env::current_dir().ok());

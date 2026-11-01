@@ -91,8 +91,14 @@ fn read_json(path: &Path) -> Option<Value> {
 impl ProjectInfo {
     pub fn load(root: &Path, config: &ProjectConfig) -> ProjectInfo {
         let files = find_config_files(root, config, 8);
+        Self::load_known(root, &files)
+    }
+
+    /// A watcher already knows the configuration file set. Ordinary source edits need no
+    /// directory walk to rediscover it; configuration and directory events use `load`.
+    pub fn load_known(root: &Path, files: &[String]) -> ProjectInfo {
         let mut info = ProjectInfo { root: root.to_path_buf(), ..Default::default() };
-        for rel in &files {
+        for rel in files {
             let abs = root.join(rel);
             let Ok(bytes) = std::fs::read(&abs) else { continue };
             info.config_hashes.insert(rel.clone(), hash::hash64(&bytes));

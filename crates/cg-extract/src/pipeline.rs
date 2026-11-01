@@ -31,7 +31,8 @@ pub struct ExtractConfig {
     /// Lower thread priority (Unix nice 10) so a build does not starve the editor.
     pub low_priority: bool,
     /// Framework extract hooks and synthesis site scanners.
-    pub hooks: Vec<Arc<dyn FileHook>>,
+    hooks: Vec<Arc<dyn FileHook>>,
+    hook_plan: Option<Arc<crate::hook_plan::HookPlan>>,
 }
 
 impl ExtractConfig {
@@ -45,7 +46,15 @@ impl ExtractConfig {
             overrides: BTreeMap::new(),
             low_priority: false,
             hooks: Vec::new(),
+            hook_plan: None,
         }
+    }
+
+    /// Compile all hook trigger literals once for the extraction pool. Replacing hooks
+    /// also replaces the plan, so no stale automaton can survive a configuration change.
+    pub fn set_hooks(&mut self, hooks: Vec<Arc<dyn FileHook>>) {
+        self.hook_plan = Some(Arc::new(crate::hook_plan::HookPlan::new(&hooks)));
+        self.hooks = hooks;
     }
 }
 
@@ -57,8 +66,9 @@ pub struct FileBatch {
     pub mtime_ns: i64,
     pub hash: [u8; 16],
     pub flags: u8,
-    /// Kernel tables (or a file-node-only table if the file could not be extracted).
+    /// Resident kernel tables. After spilling, use `rows()` to access the mapped tables.
     pub emit: EmitOut,
+    pub(crate) spilled: Option<crate::spill::SpilledTables>,
     pub extra_nodes: Vec<ExtraNode>,
     pub extra_refs: Vec<ExtraRef>,
     pub sites: Vec<SiteFact>,
@@ -69,7 +79,7 @@ pub struct FileBatch {
 
 impl FileBatch {
     pub fn rows(&self) -> FileRows<'_> {
-        FileRows::new(&self.emit)
+        self.spilled.as_ref().map_or_else(|| FileRows::new(&self.emit), |s| s.rows())
     }
 }
 
@@ -251,8 +261,9 @@ pub fn extract_bytes(rel: &str, bytes: &[u8], mtime_ns: i64, lang_hint: Lang, cf
         let rows = FileRows::new(&emit);
         let ctx = HookCtx { rel, lang, src: &src, rows, facts: &facts };
         let kcount = rows.node_count() as u32;
-        for hook in &cfg.hooks {
-            if !hook.applies(lang, rel) || (!hook.triggers().is_empty() && !hook.triggers().iter().any(|t| src.contains(t))) {
+        let selected = cfg.hook_plan.as_ref().expect("set_hooks builds the trigger plan").select(&cfg.hooks, lang, rel, &src);
+        for (hook, selected) in cfg.hooks.iter().zip(selected) {
+            if !selected {
                 continue;
             }
             let mut out = HookOut::default();
@@ -284,7 +295,21 @@ pub fn extract_bytes(rel: &str, bytes: &[u8], mtime_ns: i64, lang_hint: Lang, cf
             }
         }
     }
-    FileBatch { rel: rel.to_owned(), lang, size: bytes.len() as u32, mtime_ns, hash: h, flags, emit, extra_nodes, extra_refs, sites, facts, errors }
+    FileBatch {
+        rel: rel.to_owned(),
+        lang,
+        size: bytes.len() as u32,
+        mtime_ns,
+        hash: h,
+        flags,
+        emit,
+        spilled: None,
+        extra_nodes,
+        extra_refs,
+        sites,
+        facts,
+        errors,
+    }
 }
 
 fn build_pool(cfg: &ExtractConfig) -> rayon::ThreadPool {
@@ -295,26 +320,29 @@ fn build_pool(cfg: &ExtractConfig) -> rayon::ThreadPool {
         .thread_name(|i| format!("cg-extract-{i}"))
         .start_handler(move |_| {
             if low {
-                lower_thread_priority();
+                cg_core::budget::lower_thread_priority();
             }
         })
         .build()
         .expect("extract thread pool")
 }
 
-/// Unix nice 10 for the calling thread (Linux applies `who = 0` to the thread; other
-/// platforms keep their default priority until the platform-specific calls land in M6).
-fn lower_thread_priority() {
-    #[cfg(target_os = "linux")]
-    // SAFETY: setpriority only changes scheduling attributes of the calling thread.
-    unsafe {
-        libc::setpriority(libc::PRIO_PROCESS, 0, 10);
-    }
-}
-
 /// Extract all `entries`, feeding results to `sink` in input order. Files that vanished
 /// are reported as `None`.
 pub fn extract_stream(entries: &[FileEntry], cfg: &ExtractConfig, mut sink: impl FnMut(usize, Option<FileBatch>)) {
+    let result = try_extract_stream(entries, cfg, |i, b| {
+        sink(i, b);
+        Ok::<_, std::convert::Infallible>(())
+    });
+    match result {
+        Ok(()) => {}
+        Err(never) => match never {},
+    }
+}
+
+/// Fallible sink variant. Stops before starting the next batch if a spill or downstream
+/// write fails, instead of retaining the rest of the repository in memory.
+pub fn try_extract_stream<E>(entries: &[FileEntry], cfg: &ExtractConfig, mut sink: impl FnMut(usize, Option<FileBatch>) -> Result<(), E>) -> Result<(), E> {
     let pool = build_pool(cfg);
     let mut start = 0usize;
     while start < entries.len() {
@@ -326,10 +354,11 @@ pub fn extract_stream(entries: &[FileEntry], cfg: &ExtractConfig, mut sink: impl
         }
         let results: Vec<Option<FileBatch>> = pool.install(|| entries[start..end].par_iter().map(|e| extract_one(e, cfg)).collect());
         for (i, r) in results.into_iter().enumerate() {
-            sink(start + i, r);
+            sink(start + i, r)?;
         }
         start = end;
     }
+    Ok(())
 }
 
 /// Convenience: all batches in memory, aligned with `entries`.

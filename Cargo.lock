@@ -206,11 +206,12 @@ dependencies = [
 name = "cg-extract"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "cg-core",
  "cg-kernel",
  "cg-scan",
- "libc",
  "memchr",
+ "memmap2",
  "rayon",
  "regex",
  "rustc-hash",
@@ -275,6 +276,7 @@ dependencies = [
  "cg-store",
  "fst",
  "globset",
+ "memchr",
  "rustc-hash",
  "serde_json",
  "smallvec",
@@ -355,6 +357,7 @@ dependencies = [
  "proptest",
  "rayon",
  "rustc-hash",
+ "serde_json",
  "tempfile",
  "tracing",
 ]
@@ -380,6 +383,7 @@ dependencies = [
  "regex",
  "rusqlite",
  "serde_json",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]

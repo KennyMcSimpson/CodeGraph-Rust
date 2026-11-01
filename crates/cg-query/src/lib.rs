@@ -5,6 +5,7 @@ pub mod explore;
 pub mod graph;
 pub mod project;
 pub mod search;
+pub mod source;
 pub mod strings;
 pub mod tools;
 pub mod traverse;

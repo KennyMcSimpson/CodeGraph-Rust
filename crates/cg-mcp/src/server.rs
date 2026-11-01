@@ -3,6 +3,7 @@
 
 use crate::defs;
 use cg_core::brand;
+use cg_core::cancel::{Cancellation, Cancelled};
 use cg_query::explore::History;
 use cg_query::strings;
 use cg_query::tools::{self, StatusInfo, ToolEnv, ToolOutput};
@@ -68,17 +69,21 @@ type ProjectHandles = (Arc<Project>, Arc<Mutex<History>>, Arc<AtomicBool>);
 pub struct Server {
     cfg: Config,
     cache: Mutex<Cache>,
+    project_lifecycle: Mutex<()>,
     roots: Mutex<RootsState>,
     roots_cv: Condvar,
     client_roots: AtomicBool,
     protocol: Mutex<String>,
-    pool_tx: Mutex<Option<mpsc::Sender<Job>>>,
+    pool_tx: Mutex<Option<mpsc::SyncSender<Job>>>,
+    requests: Mutex<HashMap<String, Cancellation>>,
     outbound: OnceLock<Arc<dyn Reply>>,
     shutdown_flag: AtomicBool,
     shutdown_hooks: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
     status_hook: Mutex<Option<StatusHook>>,
     rebuild_hook: Mutex<Option<RebuildHook>>,
+    rebuilding: Arc<Mutex<Option<PathBuf>>>,
     open_hook: Mutex<Option<OpenHook>>,
+    close_hook: Mutex<Option<OpenHook>>,
     next_req: AtomicU64,
     /// Tool calls that were accepted and have not been answered yet (see [`Server::drain`]).
     inflight: (Mutex<usize>, Condvar),
@@ -137,7 +142,7 @@ pub fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
 
 impl Server {
     pub fn new(cfg: Config) -> Arc<Server> {
-        let (tx, rx) = mpsc::channel::<Job>();
+        let (tx, rx) = mpsc::sync_channel::<Job>(POOL_SIZE * 4);
         let rx = Arc::new(Mutex::new(rx));
         for i in 0..POOL_SIZE {
             let rx = Arc::clone(&rx);
@@ -152,18 +157,22 @@ impl Server {
         Arc::new(Server {
             cfg,
             cache: Mutex::new(Cache::default()),
+            project_lifecycle: Mutex::new(()),
             roots: Mutex::new(RootsState::default()),
             roots_cv: Condvar::new(),
             client_roots: AtomicBool::new(false),
             protocol: Mutex::new(SUPPORTED_PROTOCOLS[0].to_owned()),
             pool_tx: Mutex::new(Some(tx)),
+            requests: Mutex::new(HashMap::new()),
             inflight: (Mutex::new(0), Condvar::new()),
             outbound: OnceLock::new(),
             shutdown_flag: AtomicBool::new(false),
             shutdown_hooks: Mutex::new(Vec::new()),
             status_hook: Mutex::new(None),
             rebuild_hook: Mutex::new(None),
+            rebuilding: Arc::new(Mutex::new(None)),
             open_hook: Mutex::new(None),
+            close_hook: Mutex::new(None),
             next_req: AtomicU64::new(1),
             started: Instant::now(),
         })
@@ -184,6 +193,11 @@ impl Server {
     /// Called with the project root the first time a project is opened (starts its watcher).
     pub fn set_open_hook(&self, h: OpenHook) {
         *self.open_hook.lock().unwrap_or_else(|e| e.into_inner()) = Some(h);
+    }
+
+    /// Release per-project resources when its cached snapshot is evicted.
+    pub fn set_close_hook(&self, h: OpenHook) {
+        *self.close_hook.lock().unwrap_or_else(|e| e.into_inner()) = Some(h);
     }
 
     /// Open the project at `start` ahead of the first tool call (so it is watched from the start).
@@ -219,6 +233,9 @@ impl Server {
             return;
         }
         *self.pool_tx.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        for token in self.requests.lock().unwrap_or_else(|e| e.into_inner()).values() {
+            token.cancel();
+        }
         let hooks: Vec<_> = self.shutdown_hooks.lock().unwrap_or_else(|e| e.into_inner()).drain(..).collect();
         for h in hooks {
             h();
@@ -227,7 +244,7 @@ impl Server {
 
     fn submit(&self, job: Job) -> bool {
         match self.pool_tx.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            Some(tx) => tx.send(job).is_ok(),
+            Some(tx) => tx.try_send(job).is_ok(),
             None => false,
         }
     }
@@ -303,6 +320,9 @@ impl Server {
         };
         let Some(store) = Store::locate(&start) else { return Err(self.guidance(&start, explicit)) };
         let root = store.root.clone();
+        // Keep open/evict callbacks in cache mutation order. Otherwise a later eviction
+        // could stop a watcher before an earlier open callback has actually started it.
+        let _lifecycle = self.project_lifecycle.lock().unwrap_or_else(|e| e.into_inner());
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         cache.tick += 1;
         let tick = cache.tick;
@@ -322,12 +342,19 @@ impl Server {
                     None => (Arc::new(Mutex::new(History::new())), Arc::new(AtomicBool::new(false))),
                 };
                 cache.map.insert(root.clone(), Entry { project: p.clone(), history: history.clone(), noticed: noticed.clone(), last_used: tick });
+                let mut evicted = None;
                 if cache.map.len() > MAX_PROJECTS {
                     if let Some(oldest) = cache.map.iter().min_by_key(|(_, e)| e.last_used).map(|(k, _)| k.clone()) {
                         cache.map.remove(&oldest);
+                        evicted = Some(oldest);
                     }
                 }
                 drop(cache);
+                if let Some(root) = evicted {
+                    if let Some(close) = self.close_hook.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+                        close(&root);
+                    }
+                }
                 if first_open {
                     if let Some(h) = self.open_hook.lock().unwrap_or_else(|e| e.into_inner()).clone() {
                         h(&root);
@@ -336,13 +363,53 @@ impl Server {
                 Ok((p, history, noticed))
             }
             Err(e) => {
-                cache.map.remove(&root);
+                let had_project = cache.map.remove(&root).is_some();
                 drop(cache);
-                if let Some(h) = self.rebuild_hook.lock().unwrap_or_else(|e| e.into_inner()).clone() {
-                    let r = root.clone();
-                    std::thread::spawn(move || h(&r));
+                if had_project {
+                    if let Some(close) = self.close_hook.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+                        close(&root);
+                    }
                 }
-                Err(ToolOutput::err(format!("The index could not be opened ({e}). It is being rebuilt in the background; retry in a few seconds. If this persists the user can run `{} index`.", brand::BIN_NAME)))
+                let rebuilding = self.request_rebuild(&root);
+                let note = if rebuilding {
+                    "It is being rebuilt in the background; retry in a few seconds."
+                } else {
+                    "A rebuild is needed; the background rebuild worker may be busy with another project."
+                };
+                Err(ToolOutput::err(format!("The index could not be opened ({e}). {note} If this persists the user can run `{} index`.", brand::BIN_NAME)))
+            }
+        }
+    }
+
+    /// Admit one background build for repeated old-format / corrupt-index requests.
+    fn request_rebuild(&self, root: &Path) -> bool {
+        if self.is_shutdown() {
+            return false;
+        }
+        let mut slot = self.rebuilding.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(active) = slot.as_ref() {
+            return active == root;
+        }
+        let Some(hook) = self.rebuild_hook.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+            return false;
+        };
+        *slot = Some(root.to_path_buf());
+        let state = self.rebuilding.clone();
+        let root = root.to_path_buf();
+        std::thread::spawn(move || {
+            let _ = std::panic::catch_unwind(AssertUnwindSafe(|| hook(&root)));
+            *state.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        });
+        true
+    }
+
+    fn clear_projects(&self) {
+        let _lifecycle = self.project_lifecycle.lock().unwrap_or_else(|e| e.into_inner());
+        let roots: Vec<_> = self.cache.lock().unwrap_or_else(|e| e.into_inner()).map.drain().map(|(root, _)| root).collect();
+        let close = self.close_hook.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(close) = close {
+            for root in roots {
+                close(&root);
             }
         }
     }
@@ -389,6 +456,14 @@ impl Server {
     pub fn handle(self: &Arc<Self>, msg: Value, reply: Arc<dyn Reply>) {
         let method = msg.get("method").and_then(|m| m.as_str()).map(str::to_owned);
         let id = msg.get("id").cloned();
+        if method.as_deref() == Some("notifications/cancelled") && id.is_none() {
+            if let Some(id) = msg.pointer("/params/requestId") {
+                if let Some(token) = self.requests.lock().unwrap_or_else(|e| e.into_inner()).get(&id.to_string()) {
+                    token.cancel();
+                }
+            }
+            return;
+        }
         match (method, id) {
             (Some(m), Some(id)) => self.handle_request(&m, id, msg.get("params").cloned().unwrap_or(Value::Null), reply),
             (Some(m), None) => self.handle_notification(&m),
@@ -446,34 +521,158 @@ impl Server {
             return;
         };
         let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+        let token = Cancellation::new(CALL_TIMEOUT);
+        let key = id.to_string();
+        {
+            let mut requests = self.requests.lock().unwrap_or_else(|e| e.into_inner());
+            if requests.contains_key(&key) {
+                reply.send(json!({"jsonrpc":"2.0", "id":id, "error":{"code":-32600,"message":"A request with this id is already running."}}));
+                return;
+            }
+            requests.insert(key.clone(), token.clone());
+        }
         let (tx, rx) = mpsc::channel::<Value>();
         let me = Arc::clone(self);
+        let worker_token = token.clone();
         let submitted = self.submit(Box::new(move || {
-            let r = std::panic::catch_unwind(AssertUnwindSafe(|| me.run_tool(&name, &args)));
+            let r = std::panic::catch_unwind(AssertUnwindSafe(|| worker_token.run(|| me.run_tool(&name, &args))));
             let out = match r {
                 Ok(o) => o,
+                Err(e) if e.is::<Cancelled>() => ToolOutput::ok("This call was cancelled or exceeded its deadline. Narrow the query and try again."),
                 Err(_) => {
-                    me.cache.lock().unwrap_or_else(|e| e.into_inner()).map.clear();
+                    me.clear_projects();
                     ToolOutput::err("Internal error while answering (the cached snapshot was dropped). Retry once.")
                 }
             };
             let _ = tx.send(tool_result(out));
         }));
         if !submitted {
-            reply.send(json!({"jsonrpc": "2.0", "id": id, "result": tool_result(ToolOutput::err("The server is shutting down."))}));
+            self.requests.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+            reply.send(json!({"jsonrpc": "2.0", "id": id, "result": tool_result(ToolOutput::ok("The server is busy or shutting down. Retry after the current calls finish."))}));
             return;
         }
         // The watchdog answers with a success-shaped note if the call overruns its budget.
         let in_flight = InFlight::enter(self);
+        let me = Arc::clone(self);
         std::thread::spawn(move || {
             let _in_flight = in_flight;
             let result = match rx.recv_timeout(CALL_TIMEOUT) {
                 Ok(v) => v,
-                Err(_) => tool_result(ToolOutput::ok(
-                    "This call took longer than 30 seconds and was stopped. Narrow the query — name specific symbols or files — and try again.",
-                )),
+                Err(_) => {
+                    token.cancel();
+                    tool_result(ToolOutput::ok("This call exceeded its 30 second deadline; cancellation was requested. Narrow the query and try again."))
+                }
             };
+            me.requests.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
             reply.send(json!({"jsonrpc": "2.0", "id": id, "result": result}));
         });
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    struct ChannelReply(mpsc::Sender<Value>);
+    impl Reply for ChannelReply {
+        fn send(&self, v: Value) {
+            let _ = self.0.send(v);
+        }
+    }
+
+    struct Release(Arc<(Mutex<bool>, Condvar)>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            *self.0 .0.lock().unwrap() = true;
+            self.0 .1.notify_all();
+        }
+    }
+
+    fn blocked_pool() -> (Arc<Server>, Release) {
+        let server = Server::new(Config::default());
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let release = Release(gate.clone());
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..POOL_SIZE {
+            let gate = gate.clone();
+            let tx = tx.clone();
+            assert!(server.submit(Box::new(move || {
+                tx.send(()).unwrap();
+                let mut open = gate.0.lock().unwrap();
+                while !*open {
+                    open = gate.1.wait(open).unwrap();
+                }
+            })));
+        }
+        for _ in 0..POOL_SIZE {
+            rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        }
+        (server, release)
+    }
+
+    #[test]
+    fn full_queue_rejects_immediately_and_keeps_control_requests_responsive() {
+        let (server, release) = blocked_pool();
+        for _ in 0..POOL_SIZE * 4 {
+            assert!(server.submit(Box::new(|| {})));
+        }
+        assert!(!server.submit(Box::new(|| panic!("overflow job must not run"))));
+        let (tx, rx) = mpsc::channel();
+        let reply = Arc::new(ChannelReply(tx));
+        server.handle(json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{"name":"explore","arguments":{"query":"foo"}}}), reply.clone());
+        let busy = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(busy["result"]["content"][0]["text"].as_str().unwrap().contains("busy"));
+        assert!(server.requests.lock().unwrap().is_empty());
+        server.handle(json!({"jsonrpc":"2.0", "id":2, "method":"ping"}), reply);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(1)).unwrap()["id"], 2);
+        drop(release);
+        server.shutdown();
+    }
+
+    #[test]
+    fn repeated_rebuild_requests_share_one_background_worker() {
+        let server = Server::new(Config::default());
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let release = Release(gate.clone());
+        let (tx, rx) = mpsc::channel();
+        server.set_rebuild_hook(Arc::new(move |_| {
+            tx.send(()).unwrap();
+            let mut open = gate.0.lock().unwrap();
+            while !*open {
+                open = gate.1.wait(open).unwrap();
+            }
+        }));
+        assert!(server.request_rebuild(Path::new("one")));
+        rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        for _ in 0..50 {
+            assert!(server.request_rebuild(Path::new("one")));
+        }
+        assert!(!server.request_rebuild(Path::new("two")));
+        assert!(rx.try_recv().is_err());
+        drop(release);
+        server.shutdown();
+    }
+
+    #[test]
+    fn cancelled_queued_call_never_opens_a_project_and_answers_once() {
+        let (server, release) = blocked_pool();
+        let opened = Arc::new(AtomicU64::new(0));
+        let count = opened.clone();
+        server.set_open_hook(Arc::new(move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+        }));
+        let (tx, rx) = mpsc::channel();
+        let reply = Arc::new(ChannelReply(tx));
+        server
+            .handle(json!({"jsonrpc":"2.0", "id":"cancel-me", "method":"tools/call", "params":{"name":"explore","arguments":{"query":"foo"}}}), reply.clone());
+        server.handle(json!({"jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId":"cancel-me"}}), reply);
+        drop(release);
+        let result = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(result["result"]["content"][0]["text"].as_str().unwrap().contains("cancelled"));
+        server.drain(Duration::from_secs(1));
+        assert_eq!(opened.load(Ordering::SeqCst), 0);
+        assert!(server.requests.lock().unwrap().is_empty());
+        assert!(rx.try_recv().is_err());
+        server.shutdown();
     }
 }

@@ -125,28 +125,58 @@ pub struct FileCx<'e, 'v> {
 type FieldList = Vec<(Box<str>, Option<NodeIdx>)>;
 
 pub struct WorkerCx<'e, 'v> {
-    cache: Vec<(FileId, Rc<FileCx<'e, 'v>>)>,
+    cache: Vec<(FileId, Rc<FileCx<'e, 'v>>, usize)>,
+    cache_bytes: usize,
     field_cache: FxHashMap<NodeIdx, FieldList>,
+    field_cache_bytes: usize,
 }
 
 impl<'e, 'v> WorkerCx<'e, 'v> {
     pub fn new() -> Self {
-        WorkerCx { cache: Vec::new(), field_cache: FxHashMap::default() }
+        WorkerCx { cache: Vec::new(), cache_bytes: 0, field_cache: FxHashMap::default(), field_cache_bytes: 0 }
     }
 
     pub fn file_cx(&mut self, e: &'e Engine<'v>, f: FileId) -> Rc<FileCx<'e, 'v>> {
-        if let Some(pos) = self.cache.iter().position(|(id, _)| *id == f) {
+        if let Some(pos) = self.cache.iter().position(|(id, _, _)| *id == f) {
             let item = self.cache.remove(pos);
             let rc = item.1.clone();
             self.cache.push(item);
             return rc;
         }
         let rc = Rc::new(FileCx::new(e, f));
-        if self.cache.len() >= 6 {
-            self.cache.remove(0);
+        let bytes = rc.heap_bytes();
+        let limit = e.budget.worker_cache_bytes();
+        if bytes > limit {
+            return rc;
         }
-        self.cache.push((f, rc.clone()));
+        while self.cache.len() >= 6 || self.cache_bytes.saturating_add(bytes) > limit {
+            let (_, _, evicted) = self.cache.remove(0);
+            self.cache_bytes -= evicted;
+        }
+        self.cache.push((f, rc.clone(), bytes));
+        self.cache_bytes += bytes;
         rc
+    }
+
+    fn cache_field(&mut self, t: NodeIdx, name: &str, value: Option<NodeIdx>, limit: usize) {
+        if name.len().saturating_add(256) > limit {
+            return;
+        }
+        if self.field_cache_bytes.saturating_add(name.len() + 256) > limit {
+            self.field_cache = FxHashMap::default();
+            self.field_cache_bytes = 0;
+        }
+        let old_map_capacity = self.field_cache.capacity();
+        let list = self.field_cache.entry(t).or_default();
+        let old_capacity = list.capacity();
+        list.push((name.into(), value));
+        self.field_cache_bytes += name.len()
+            + (list.capacity() - old_capacity) * std::mem::size_of::<(Box<str>, Option<NodeIdx>)>()
+            + (self.field_cache.capacity() - old_map_capacity) * (std::mem::size_of::<(NodeIdx, FieldList)>() + 8);
+        if self.field_cache_bytes > limit {
+            self.field_cache = FxHashMap::default();
+            self.field_cache_bytes = 0;
+        }
     }
 }
 
@@ -161,6 +191,21 @@ fn kind_of(view: &View, n: NodeIdx) -> NodeKind {
 }
 
 impl<'e, 'v> FileCx<'e, 'v> {
+    fn heap_bytes(&self) -> usize {
+        fn table<K, V>(map: &FxHashMap<K, V>) -> usize {
+            map.capacity() * (std::mem::size_of::<(K, V)>() + 8)
+        }
+        let extra_bindings = self.bindings.values().filter(|v| v.spilled()).map(|v| v.capacity() * std::mem::size_of::<&BindingRec>()).sum::<usize>();
+        let extra_imports = self.import_by_local.values().filter(|v| v.spilled()).map(|v| v.capacity() * 4).sum::<usize>()
+            + self.imports_by_line.values().filter(|v| v.spilled()).map(|v| v.capacity() * 4).sum::<usize>();
+        table(&self.bindings)
+            + table(&self.import_by_local)
+            + table(&self.imports_by_line)
+            + extra_bindings
+            + extra_imports
+            + self.imported_files.capacity() * (std::mem::size_of::<FileId>() + 8)
+            + if self.wildcards.spilled() { self.wildcards.capacity() * 4 } else { 0 }
+    }
     pub fn new(e: &'e Engine<'v>, file: FileId) -> Self {
         let view = e.view;
         let fr = view.file(file);
@@ -520,7 +565,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
                 }
             }
         }
-        wcx.field_cache.entry(t).or_default().push((name.into(), result));
+        wcx.cache_field(t, name, result, self.e.budget.worker_cache_bytes());
         result
     }
 
@@ -1186,5 +1231,21 @@ impl<'e, 'v> FileCx<'e, 'v> {
                 self.resolve_call_name(wcx, r, name)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    #[test]
+    fn optional_field_cache_releases_capacity_at_its_budget() {
+        let mut worker = WorkerCx::new();
+        for i in 0..1000 {
+            worker.cache_field(NodeIdx(i / 3), &format!("field{i}"), Some(NodeIdx(i)), 1024);
+            assert!(worker.field_cache_bytes <= 1024);
+        }
+        let before = worker.field_cache_bytes;
+        worker.cache_field(NodeIdx(0), &"x".repeat(2048), None, 1024);
+        assert_eq!(worker.field_cache_bytes, before);
     }
 }

@@ -8,18 +8,37 @@ use crate::project::ProjectInfo;
 use cg_core::budget::{peak_rss_mb, MemBudget};
 use cg_core::config::ProjectConfig;
 use cg_core::{CgError, Result};
-use cg_extract::{extract_stream, fileflags, ExtractConfig, FileBatch, FileHook};
+use cg_extract::{fileflags, try_extract_stream, ExtractConfig, FileBatch, FileHook};
 use cg_scan::{scan, ScanOptions};
 use cg_store::{build_draft, finish, Draft, FinishInput, ProjectMeta, Seg, Store, View};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct IndexOptions {
     pub threads: Option<usize>,
     pub memory_mb: Option<u64>,
     pub low_priority: bool,
+}
+
+impl Default for IndexOptions {
+    fn default() -> Self {
+        Self { threads: None, memory_mb: None, low_priority: true }
+    }
+}
+
+pub fn indexing_pool(budget: MemBudget, low_priority: bool) -> Result<rayon::ThreadPool> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(budget.threads)
+        .stack_size(16 << 20)
+        .start_handler(move |_| {
+            if low_priority {
+                cg_core::budget::lower_thread_priority();
+            }
+        })
+        .build()
+        .map_err(|e| CgError::other(format!("thread pool: {e}")))
 }
 
 #[derive(Clone, Debug, Default)]
@@ -38,6 +57,8 @@ pub struct IndexReport {
     pub threads: usize,
     pub budget_mb: u64,
     pub peak_rss_mb: u64,
+    /// Kernel heap capacity released to immutable temporary mappings during extraction.
+    pub spilled_kernel_bytes: u64,
     pub timings: Vec<(&'static str, Duration)>,
     pub frameworks: Vec<String>,
     pub warnings: Vec<String>,
@@ -53,6 +74,9 @@ impl IndexReport {
             s.push_str(&format!("  {:<14} {:>9.1} ms\n", name, d.as_secs_f64() * 1e3));
         }
         s.push_str(&format!("  {:<14} {:>9.1} ms   peak RSS {} MB\n", "total", self.total().as_secs_f64() * 1e3, self.peak_rss_mb));
+        if self.spilled_kernel_bytes > 0 {
+            s.push_str(&format!("  kernel spill: {:.1} MiB of heap buffers released to temporary maps\n", self.spilled_kernel_bytes as f64 / (1 << 20) as f64));
+        }
         s
     }
 }
@@ -87,15 +111,8 @@ pub struct Built {
 /// Build a complete base segment for the project at `root`.
 pub fn build_seg(root: &Path, opts: &IndexOptions) -> Result<Built> {
     let mut phase = Phase::new();
-    let mut budget = MemBudget::detect();
-    if let Some(mb) = opts.memory_mb {
-        budget = MemBudget::from_total(mb << 20, budget.threads);
-    }
-    if let Some(t) = opts.threads {
-        budget.threads = t.max(1);
-    }
-    let pool =
-        rayon::ThreadPoolBuilder::new().num_threads(budget.threads).stack_size(16 << 20).build().map_err(|e| CgError::other(format!("thread pool: {e}")))?;
+    let budget = MemBudget::configured(opts.memory_mb, opts.threads);
+    let pool = indexing_pool(budget, opts.low_priority)?;
     let mut report = IndexReport { threads: budget.threads, budget_mb: budget.total >> 20, ..Default::default() };
 
     let config = ProjectConfig::load(root);
@@ -117,17 +134,25 @@ pub fn build_seg(root: &Path, opts: &IndexOptions) -> Result<Built> {
     cfg.batch_bytes = budget.extract_batch_bytes();
     cfg.overrides = config.extensions.clone();
     cfg.low_priority = opts.low_priority;
-    cfg.hooks = hooks_for(&project);
+    cfg.set_hooks(hooks_for(&project));
     let deprio = deprioritize_matcher(root, &config);
     let mut batches: Vec<FileBatch> = Vec::with_capacity(scanned.files.len());
-    extract_stream(&scanned.files, &cfg, |i, b| {
+    let mut resident = 0u64;
+    let spill_dir = root.join(cg_core::brand::DATA_DIR).join("tmp");
+    try_extract_stream(&scanned.files, &cfg, |i, b| {
         if let Some(mut b) = b {
             if deprio.as_ref().is_some_and(|g| g.matched_path_or_any_parents(&scanned.files[i].rel, false).is_ignore()) {
                 b.flags |= fileflags::DEPRIORITIZED;
             }
+            resident += cg_extract::spill::resident_bytes(&b);
             batches.push(b);
+            if resident >= budget.extract / 2 {
+                report.spilled_kernel_bytes += cg_extract::spill::spill(&mut batches, &spill_dir)?;
+                resident = 0;
+            }
         }
-    });
+        Ok::<_, std::io::Error>(())
+    })?;
     report.files = batches.len();
     report.source_bytes = batches.iter().map(|b| b.size as u64).sum();
     report.parse_error_files = batches.iter().filter(|b| b.flags & fileflags::PARSE_ERROR != 0).count();
@@ -142,7 +167,7 @@ pub fn build_seg(root: &Path, opts: &IndexOptions) -> Result<Built> {
     let seg = Arc::new(seg);
     let view = View::new(seg.clone()).with_root(root.to_path_buf());
     let (out, synth) = {
-        let mut engine = Engine::build(&view, &project);
+        let mut engine = pool.install(|| Engine::build_with_budget(&view, &project, budget));
         phase.lap("tables");
         let out = pool.install(|| resolve_all(&mut engine));
         phase.lap("resolve");
@@ -202,8 +227,8 @@ pub fn deprioritize_matcher(root: &Path, config: &ProjectConfig) -> Option<ignor
 pub fn index_project(root: &Path, opts: &IndexOptions) -> Result<IndexReport> {
     let store = Store::at(root);
     store.create()?;
-    store.cleanup_tmp();
     let guard = store.write_lock(Duration::from_secs(30))?;
+    store.cleanup_tmp();
     index_with_guard(&store, &guard, root, opts)
 }
 

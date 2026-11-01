@@ -1,5 +1,5 @@
-//! Memory budget and thread count (design doc 3.3). Every cache, queue and batch size in
-//! the engine derives from `MemBudget`; nothing grows without a bound.
+//! Memory tuning budget and thread count (design doc 3.3). Worker counts, batch sizes,
+//! spill thresholds and resolver cache limits derive from this budget. It is not an RSS cap.
 
 use crate::brand::env;
 
@@ -25,7 +25,7 @@ impl MemBudget {
     pub fn from_total(total: u64, threads: usize) -> MemBudget {
         let total = total.max(256 * MB);
         let by_mem = (total / 4 / PER_THREAD_BYTES).max(1) as usize;
-        MemBudget { total, extract: total / 4, resolve: total * 35 / 100, synth: total * 15 / 100, threads: threads.min(by_mem).max(1) }
+        MemBudget { total, extract: total / 4, resolve: total / 100 * 35, synth: total / 100 * 15, threads: threads.min(by_mem).max(1) }
     }
 
     /// Detect from the environment, honouring `CGR_MEMORY_MB` / `CGR_THREADS`.
@@ -34,15 +34,28 @@ impl MemBudget {
         let threads = env::get(env::THREADS, None).and_then(|v| v.parse::<usize>().ok()).filter(|n| *n > 0).unwrap_or(cores);
         let total = env::get(env::MEMORY_MB, None)
             .and_then(|v| v.parse::<u64>().ok())
-            .map(|mb| mb * MB)
+            .map(|mb| mb.saturating_mul(MB))
             .unwrap_or_else(|| available_memory().map(|a| a * 6 / 10).unwrap_or(2048 * MB));
         MemBudget::from_total(total, threads)
+    }
+
+    /// Apply command-line overrides without allowing an explicit thread count to bypass
+    /// the memory-derived worker limit.
+    pub fn configured(memory_mb: Option<u64>, threads: Option<usize>) -> MemBudget {
+        let detected = Self::detect();
+        Self::from_total(memory_mb.map(|mb| mb.saturating_mul(MB)).unwrap_or(detected.total), threads.unwrap_or(detected.threads))
     }
 
     /// Source bytes one extraction batch may hold (a fraction of the extract share, since a
     /// file's tables are several times its source).
     pub fn extract_batch_bytes(&self) -> u64 {
         (self.extract / 8).clamp(8 * MB, 256 * MB)
+    }
+
+    /// One worker's optional resolver cache share. Clearing a cache only recomputes a
+    /// lookup; it never truncates candidate sets or changes resolution semantics.
+    pub fn worker_cache_bytes(&self) -> usize {
+        (self.resolve / self.threads.max(1) as u64 / 8).clamp(64 << 10, 16 << 20) as usize
     }
 }
 
@@ -57,7 +70,11 @@ pub fn available_memory() -> Option<u64> {
     {
         macos_available()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    {
+        windows_available()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         None
     }
@@ -94,22 +111,51 @@ fn linux_available() -> Option<u64> {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(deprecated)] // libc still exposes the Mach VM ABI used here; avoid another runtime dependency.
 fn macos_available() -> Option<u64> {
-    // vm_stat reports pages; free + inactive + speculative is what the system can hand out.
-    let out = std::process::Command::new("vm_stat").output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let page: u64 = text
-        .lines()
-        .next()
-        .and_then(|l| l.split("page size of ").nth(1))
-        .and_then(|l| l.split_whitespace().next())
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(16384);
-    let pages = |key: &str| -> u64 {
-        text.lines().find(|l| l.starts_with(key)).and_then(|l| l.split(':').nth(1)).and_then(|v| v.trim().trim_end_matches('.').parse().ok()).unwrap_or(0)
-    };
-    let free = pages("Pages free") + pages("Pages inactive") + pages("Pages speculative");
-    Some(free * page)
+    extern "C" {
+        fn mach_port_deallocate(task: libc::mach_port_t, name: libc::mach_port_t) -> libc::kern_return_t;
+    }
+    // Use Mach directly: detecting a budget must not spawn vm_stat on a hot build path.
+    // SAFETY: the kernel fills the correctly sized plain VM statistics struct we own.
+    unsafe {
+        let host = libc::mach_host_self();
+        let mut vm: libc::vm_statistics64 = std::mem::zeroed();
+        let mut count = libc::HOST_VM_INFO64_COUNT;
+        let result = libc::host_statistics64(host, libc::HOST_VM_INFO64, (&mut vm as *mut libc::vm_statistics64).cast(), &mut count);
+        let page = libc::sysconf(libc::_SC_PAGESIZE);
+        mach_port_deallocate(libc::mach_task_self(), host);
+        if result != libc::KERN_SUCCESS || page <= 0 {
+            return None;
+        }
+        Some((vm.free_count as u64 + vm.inactive_count as u64 + vm.speculative_count as u64) * page as u64)
+    }
+}
+
+#[cfg(windows)]
+fn windows_available() -> Option<u64> {
+    #[repr(C)]
+    struct MemoryStatus {
+        length: u32,
+        load: u32,
+        total_phys: u64,
+        avail_phys: u64,
+        total_page: u64,
+        avail_page: u64,
+        total_virtual: u64,
+        avail_virtual: u64,
+        avail_extended: u64,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GlobalMemoryStatusEx(status: *mut MemoryStatus) -> i32;
+    }
+    // SAFETY: Windows checks length, then fills this documented MEMORYSTATUSEX layout.
+    unsafe {
+        let mut status: MemoryStatus = std::mem::zeroed();
+        status.length = std::mem::size_of::<MemoryStatus>() as u32;
+        (GlobalMemoryStatusEx(&mut status) != 0).then_some(status.avail_phys)
+    }
 }
 
 /// Peak resident set size of this process in MiB (best effort, 0 if unknown).
@@ -140,6 +186,39 @@ pub fn current_rss_mb() -> u64 {
     0
 }
 
+/// Lower only the indexing worker's scheduling priority, leaving the MCP / query threads
+/// responsive. macOS uses thread QoS because process-wide nice would also lower readers.
+pub fn lower_thread_priority() {
+    #[cfg(target_os = "linux")]
+    // SAFETY: on Linux, who=0 changes the calling thread's priority.
+    unsafe {
+        libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn pthread_set_qos_class_self_np(class: u32, relative: i32) -> i32;
+        }
+        // QOS_CLASS_UTILITY, from the macOS pthread/qos.h ABI.
+        // SAFETY: changes the scheduling class of this worker only.
+        unsafe {
+            pthread_set_qos_class_self_np(0x11, 0);
+        }
+    }
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetCurrentThread() -> *mut std::ffi::c_void;
+            fn SetThreadPriority(thread: *mut std::ffi::c_void, priority: i32) -> i32;
+        }
+        // SAFETY: the pseudo-handle is valid for this thread; -1 is BELOW_NORMAL.
+        unsafe {
+            SetThreadPriority(GetCurrentThread(), -1);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,5 +234,13 @@ mod tests {
     fn small_budget_limits_threads() {
         let b = MemBudget::from_total(256 * MB, 16);
         assert_eq!(b.threads, 1);
+    }
+    #[test]
+    fn explicit_threads_still_respect_the_memory_share() {
+        let b = MemBudget::configured(Some(256), Some(1024));
+        assert_eq!(b.total, 256 * MB);
+        assert_eq!(b.threads, 1);
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+        assert!(available_memory().is_some());
     }
 }

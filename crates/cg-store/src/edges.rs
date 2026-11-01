@@ -42,9 +42,67 @@ fn cmp(a: &EdgeBuild, b: &EdgeBuild) -> Ordering {
         .then_with(|| a.kind.cmp(&b.kind))
 }
 
+fn identity(e: &EdgeBuild) -> (u32, u8, u32, u32, u32) {
+    (e.src, e.kind & 15, e.dst, e.line, e.col)
+}
+
+/// Stable LSD radix sorting of the integer identity, followed by comparison sorting only
+/// inside duplicate groups to preserve class / pass precedence. Constant bytes are skipped.
+fn sort_edges(edges: &mut Vec<EdgeBuild>) {
+    let scratch_bytes = edges.len().saturating_mul(std::mem::size_of::<EdgeBuild>());
+    if edges.len() < 32_768 || scratch_bytes as u64 > cg_core::budget::MemBudget::detect().extract / 2 {
+        edges.par_sort_unstable_by(cmp);
+        return;
+    }
+    let mut scratch = vec![edges[0]; edges.len()];
+    let key = |e: &EdgeBuild, field| match field {
+        0 => e.col,
+        1 => e.line,
+        2 => e.dst,
+        3 => (e.kind & 15) as u32,
+        _ => e.src,
+    };
+    for field in 0..5 {
+        let first = key(&edges[0], field);
+        let varied = edges.iter().fold(0, |v, e| v | (key(e, field) ^ first));
+        for shift in (0..32).step_by(8) {
+            if varied & (255 << shift) == 0 {
+                continue;
+            }
+            let mut counts = [0usize; 256];
+            for e in edges.iter() {
+                counts[((key(e, field) >> shift) & 255) as usize] += 1;
+            }
+            let mut sum = 0;
+            for count in &mut counts {
+                let n = *count;
+                *count = sum;
+                sum += n;
+            }
+            for e in edges.iter() {
+                let slot = &mut counts[((key(e, field) >> shift) & 255) as usize];
+                scratch[*slot] = *e;
+                *slot += 1;
+            }
+            std::mem::swap(edges, &mut scratch);
+        }
+    }
+    let mut start = 0;
+    while start < edges.len() {
+        let mut end = start + 1;
+        while end < edges.len() && identity(&edges[start]) == identity(&edges[end]) {
+            end += 1;
+        }
+        if end - start > 1 {
+            edges[start..end].sort_unstable_by(cmp);
+        }
+        start = end;
+    }
+}
+
 /// Sort and deduplicate `edges` in place and build the CSR arrays for `n_nodes` nodes.
 pub fn assemble(edges: &mut Vec<EdgeBuild>, n_nodes: usize) -> EdgeAsm {
-    edges.par_sort_unstable_by(cmp);
+    sort_edges(edges);
     edges.dedup_by(|b, a| a.src == b.src && a.dst == b.dst && (a.kind & 0x0F) == (b.kind & 0x0F) && a.line == b.line && a.col == b.col);
     let m = edges.len();
     let mut out_off = vec![0u32; n_nodes + 1];
@@ -103,7 +161,7 @@ pub struct SparseAsm {
 /// Like [`assemble`], but the CSR is indexed by position in the sorted list of source nodes
 /// (`d_src_nodes`) and, for the reverse side, of destination nodes (`d_dst_nodes`).
 pub fn assemble_sparse(edges: &mut Vec<EdgeBuild>) -> SparseAsm {
-    edges.par_sort_unstable_by(cmp);
+    sort_edges(edges);
     edges.dedup_by(|b, a| a.src == b.src && a.dst == b.dst && (a.kind & 0x0F) == (b.kind & 0x0F) && a.line == b.line && a.col == b.col);
     let m = edges.len();
     let mut src_nodes: Vec<u32> = Vec::new();
@@ -185,6 +243,42 @@ pub fn install(seg: &mut Seg, a: EdgeAsm) {
 mod tests {
     use super::*;
     use cg_core::{EdgeKind, Provenance, NONE};
+
+    #[test]
+    fn radix_order_matches_comparison_order_and_sparse_csr() {
+        let mut state = 0x0000_5eed_f00d_u64;
+        let mut edges = Vec::with_capacity(40_004);
+        for i in 0..40_000 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let key = state as u32;
+            let mut edge = e(key % 503, (key >> 9) % 997, EdgeKind::Calls, (i % 4) as u8, key >> 20);
+            edge.col = key & 127;
+            edge.meta = i;
+            edge.order = (i % 5) as u16;
+            edge.ref_idx = i;
+            edges.push(edge);
+        }
+        for class in 0..4 {
+            let mut edge = e(502, 996, EdgeKind::Contains, class, NONE);
+            edge.col = NONE;
+            edges.push(edge);
+        }
+        let mut expected = edges.clone();
+        expected.sort_unstable_by(cmp);
+        sort_edges(&mut edges);
+        let fields = |e: &EdgeBuild| (identity(e), e.kind, e.res, e.ref_idx, e.meta, e.order);
+        assert_eq!(edges.iter().map(fields).collect::<Vec<_>>(), expected.iter().map(fields).collect::<Vec<_>>());
+        let mut dense_edges = edges.clone();
+        let dense = assemble(&mut dense_edges, 997);
+        let sparse = assemble_sparse(&mut edges);
+        assert_eq!(dense.out_dst, sparse.asm.out_dst);
+        assert_eq!(dense.out_kind, sparse.asm.out_kind);
+        for (pos, &node) in sparse.src_nodes.iter().enumerate() {
+            assert_eq!(dense.out_off[node as usize + 1] - dense.out_off[node as usize], sparse.asm.out_off[pos + 1] - sparse.asm.out_off[pos]);
+        }
+    }
 
     fn e(src: u32, dst: u32, kind: EdgeKind, class: u8, line: u32) -> EdgeBuild {
         EdgeBuild { src, dst, kind: outkind::pack(kind, Provenance::TreeSitter, class), line, col: 0, res: 0, ref_idx: NONE, meta: NONE, order: 0 }

@@ -92,7 +92,7 @@ seg_parts! {
     tri_post: u32 = 36,
     tokens_fst: u8 = 37,
     token_post_off: u32 = 38,
-    token_post: PostEntry = 39,
+    token_post: u8 = 39,
     node_norm: u16 = 40,
     filestats: FileStat = 41,
     refs: RefRec = 42,
@@ -105,6 +105,7 @@ seg_parts! {
     config_digests: u8 = 49,
     fname_idx: FileNameRec = 50,
     tail_idx: TailRec = 51,
+    token_df: u32 = 52,
     // ---- delta layers (design doc 5.6) ----
     dead_nodes: u64 = 60,
     emeta_off: u32 = 62,
@@ -137,6 +138,9 @@ pub struct SegMeta {
     pub n_nodes: u32,
     pub n_edges: u32,
     pub n_refs: u32,
+    /// Sum of BM25 document lengths, computed once while building the snapshot.
+    #[serde(default)]
+    pub total_tokens: u64,
     /// For a delta: the generation of the base it applies to.
     pub base_gen: u64,
 }
@@ -261,6 +265,17 @@ impl Seg {
         out
     }
 
+    /// Exact encoded size without hashing partitions or allocating a serialized copy.
+    pub fn encoded_len(&self) -> u64 {
+        let entries = self.p.entries();
+        let align = |n: usize| (n + 7) & !7;
+        let mut size = align(HEADER_SIZE + entries.len() * DIR_ENTRY_SIZE);
+        for (id, _, bytes, _) in entries {
+            size = align(size) + if id == 1 { serde_json::to_vec(&self.meta).expect("meta json").len() } else { bytes.len() };
+        }
+        align(size) as u64
+    }
+
     pub fn write_into<W: Write>(&self, w: &mut W) -> std::io::Result<u64> {
         let mut parts = self.p.entries();
         // Partition 1 (meta) is always regenerated from `self.meta`.
@@ -370,6 +385,9 @@ mod tests {
         std::fs::write(&path, &bytes).unwrap();
         let back = Seg::open(&path).unwrap();
         assert!(back.verify().is_err());
+        // Immutable mappings must be closed before truncating their file; Windows also
+        // enforces this at the OS boundary.
+        drop(back);
         std::fs::write(&path, &bytes[..n - 8]).unwrap();
         assert!(Seg::open(&path).is_err());
         std::fs::write(&path, b"nope").unwrap();

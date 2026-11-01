@@ -31,6 +31,7 @@ pub enum Bound {
 }
 
 pub struct Engine<'v> {
+    pub budget: cg_core::budget::MemBudget,
     pub view: &'v View,
     pub project: &'v ProjectInfo,
     pub modules: Modules<'v>,
@@ -54,6 +55,10 @@ fn is_top_level(view: &View, n: NodeIdx) -> bool {
 
 impl<'v> Engine<'v> {
     pub fn build(view: &'v View, project: &'v ProjectInfo) -> Engine<'v> {
+        Self::build_with_budget(view, project, cg_core::budget::MemBudget::detect())
+    }
+
+    pub fn build_with_budget(view: &'v View, project: &'v ProjectInfo, budget: cg_core::budget::MemBudget) -> Engine<'v> {
         let modules = Modules::build(view, project);
         let n_files = modules.file_pkg.len().max(view.n_files());
         let files: Vec<FileId> = view.files().collect();
@@ -82,6 +87,7 @@ impl<'v> Engine<'v> {
         }
 
         let mut e = Engine {
+            budget,
             view,
             project,
             modules,

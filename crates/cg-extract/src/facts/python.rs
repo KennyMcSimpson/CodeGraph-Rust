@@ -256,7 +256,7 @@ fn assignment(cx: &mut Cx, n: Node, scope: u32) {
                             .bindings
                             .iter()
                             .any(|b| b.scope == cs && b.name == nm && b.kind == BindKind::Field && (!b.decl_type.is_empty() || !b.init_ctor.is_empty()));
-                        if !already || !(decl.is_empty() && init.is_empty()) {
+                        if !(already && decl.is_empty() && init.is_empty()) {
                             cx.add_binding(cs, &nm, BindKind::Field, &decl, &init, line);
                         }
                     }

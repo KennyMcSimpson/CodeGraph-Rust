@@ -280,6 +280,41 @@ fn run_sequence(seed: u64, steps: usize) {
 
 type Edit = Box<dyn Fn(&Path, u64)>;
 
+#[test]
+fn watcher_paths_match_full_after_edits_renames_and_directory_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for (i, (f, c)) in FILES.iter().enumerate() {
+        write(root, f, c, i as u64);
+    }
+    index_project(root, &opts()).unwrap();
+    let edits: Vec<(&str, Edit, Vec<&str>)> = vec![
+        ("edit", replace_in("ts/service.ts", "return 1", "return 22"), vec!["ts/service.ts"]),
+        ("add", put("ts/fresh.ts", "import { helper } from './service';\nexport const fresh = helper();\n"), vec!["ts/fresh.ts"]),
+        ("rename old", delete("ts/fresh.ts"), vec!["ts/fresh.ts", "ts/renamed.ts"]),
+        ("rename new", put("ts/renamed.ts", "export function fresh() {}\n"), vec!["ts/renamed.ts"]),
+        ("register", put("bus/reg.ts", "import { bus } from './bus';\nimport { onTick } from './handler';\nbus.on('tock', onTick);\n"), vec!["bus/reg.ts"]),
+        ("emit", replace_in("bus/bus.ts", "'tick'", "'tock'"), vec!["bus/bus.ts"]),
+        ("directory", put("folder/child/new.ts", "export function nested() {}\n"), vec!["folder"]),
+        ("config", put("package.json", "{\"name\":\"fixture\",\"dependencies\":{\"express\":\"4\"}}\n"), vec!["package.json"]),
+    ];
+    for (step, (name, edit, paths)) in edits.into_iter().enumerate() {
+        edit(root, 900 + step as u64);
+        let paths = paths.into_iter().map(|p| root.join(p)).collect();
+        sync(root, &SyncOptions { index: opts(), paths: Some(paths), ..Default::default() }).unwrap();
+        assert_eq!(canonical_of(root), full_canonical(root), "event {name}");
+    }
+    fs::remove_dir_all(root.join("folder")).unwrap();
+    sync(root, &SyncOptions { index: opts(), paths: Some(vec![root.join("folder")]), ..Default::default() }).unwrap();
+    assert_eq!(canonical_of(root), full_canonical(root), "removed directory");
+    // An absent event is recovered by the periodic / explicit full scan.
+    write(root, "ts/unreported.ts", "export function recovered() {}\n", 999);
+    sync(root, &SyncOptions { index: opts(), paths: Some(vec![]), ..Default::default() }).unwrap();
+    assert!(!canonical_of(root).iter().any(|s| s.contains("recovered")));
+    sync(root, &SyncOptions { index: opts(), ..Default::default() }).unwrap();
+    assert_eq!(canonical_of(root), full_canonical(root));
+}
+
 fn replace_in(rel: &'static str, from: &'static str, to: &'static str) -> Edit {
     Box::new(move |root, step| {
         let cur = fs::read_to_string(root.join(rel)).unwrap();
@@ -387,6 +422,8 @@ fn targeted_edits_match_full_rebuild() {
         ("py remove later", delete("py/pkg/later.py")),
         ("go define Later", put("go/a/later.go", "package a\n\nfunc Later() {}\n")),
         ("go remove Later", delete("go/a/later.go")),
+        ("go package representative changes", put("go/a/00.go", "package a\n\nfunc Zero() {}\n")),
+        ("go package representative restored", delete("go/a/00.go")),
         ("java define Later", put("java/com/ex/Later.java", "package com.ex;\n\npublic class Later {\n    public void go() {}\n}\n")),
         ("java remove Later", delete("java/com/ex/Later.java")),
         ("rs define later", replace_in("rs/src/util.rs", "fn inner() {}", "fn inner() {}\npub fn later() {}")),
@@ -413,6 +450,13 @@ fn targeted_edits_match_full_rebuild() {
         ("emitter: handler file back", original("bus/handler.ts")),
         ("emitter: second handler", put("bus/h2.ts", "import { bus } from './bus';\nfunction second() {}\nbus.on('tick', second);\n")),
         ("emitter: second handler removed", delete("bus/h2.ts")),
+        (
+            "emitter: registration without a new definition",
+            put("bus/reg.ts", "import { bus } from './bus';\nimport { onTick } from './handler';\nbus.on('tock', onTick);\n"),
+        ),
+        ("emitter: activate new registration", replace_in("bus/bus.ts", "'tick'", "'tock'")),
+        ("emitter: remove registration", delete("bus/reg.ts")),
+        ("emitter: restore event", original("bus/bus.ts")),
         ("java: remove Square", delete("java/com/ex/Square.java")),
         ("java: Square back", original("java/com/ex/Square.java")),
         ("java: Square stops implementing", replace_in("java/com/ex/Square.java", " implements Shape", "")),
@@ -486,6 +530,87 @@ fn up_to_date_tree_writes_nothing() {
     let rep = sync(root, &SyncOptions { index: opts(), ..Default::default() }).unwrap();
     assert!(rep.up_to_date, "second sync of the same state is a no-op: {rep:?}");
     assert_eq!(Store::at(root).read_manifest().unwrap().unwrap().generation, m2.generation);
+}
+
+#[test]
+fn compaction_preserves_live_graph_and_future_sync_without_source_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for (i, (f, c)) in FILES.iter().enumerate() {
+        write(root, f, c, i as u64);
+    }
+    write(root, "zz.ts", "export function lastFile() {}\n", 100);
+    write(root, "ts/tail-consumer.ts", "import { lastFile } from '../zz';\nexport function tailConsumer() { lastFile(); }\n", 101);
+    index_project(root, &opts()).unwrap();
+    write(root, "ts/util.ts", "export function util() { return 5; }\nexport function added() { return util(); }\n", 999);
+    fs::remove_file(root.join("zz.ts")).unwrap();
+    let so = SyncOptions { index: opts(), ..Default::default() };
+    sync(root, &so).unwrap();
+    let store = Store::at(root);
+    let snap = store.open_snapshot().unwrap();
+    assert!(snap.view.delta.is_some(), "compaction must exercise a delta, including a removed last-file dependency");
+    let before = dump::canonical(&snap.view);
+    // This view deliberately has no project/source root. Compaction still has everything
+    // it needs in the mapped snapshot, including all facts for later syncs.
+    let mut offline = cg_store::View::new(snap.view.base.clone());
+    if let Some(delta) = &snap.view.delta {
+        offline = offline.with_delta(delta.seg.clone()).unwrap();
+    }
+    let seg = cg_store::compact::compact(&offline);
+    assert_eq!(seg.encoded_len(), seg.to_bytes().len() as u64);
+    let packed = cg_store::View::new(std::sync::Arc::new(seg));
+    assert_eq!(before, dump::canonical(&packed));
+    let again = cg_store::compact::compact(&packed);
+    assert_eq!(packed.base.to_bytes(), again.to_bytes(), "compaction is deterministic and idempotent");
+    let guard = store.write_lock(Duration::from_secs(1)).unwrap();
+    store.publish_base(&again, &guard).unwrap();
+    drop(guard);
+    assert_eq!(before, dump::canonical(&snap.view), "readers keep the previous complete generation during publication");
+    write(root, "ts/new.ts", "import { util } from './util';\nexport function main() { return util(); }\n", 1001);
+    write(root, "zz.ts", "export function lastFile() {}\n", 1002);
+    sync(root, &so).unwrap();
+    assert_eq!(canonical_of(root), full_canonical(root));
+    let added = store.open_snapshot().unwrap();
+    let packed = cg_store::View::new(std::sync::Arc::new(cg_store::compact::compact(&added.view)));
+    assert_eq!(dump::canonical(&added.view), dump::canonical(&packed), "new-file ids also survive compaction");
+}
+
+#[test]
+fn idle_compaction_waits_for_quiet_and_never_needs_the_source_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for (i, (f, c)) in FILES.iter().enumerate() {
+        write(root, f, c, i as u64);
+    }
+    index_project(root, &opts()).unwrap();
+    write(root, "ts/util.ts", &format!("// comment\n{}", FILES.iter().find(|f| f.0 == "ts/util.ts").unwrap().1), 1000);
+    sync(root, &SyncOptions { index: opts(), ..Default::default() }).unwrap();
+    let store = Store::at(root);
+    assert!(store.open_snapshot().unwrap().view.delta.is_some());
+    let before = canonical_of(root);
+    let mut manifest = store.read_manifest().unwrap().unwrap();
+    manifest.syncs_since_merge = 200;
+    fs::write(root.join(".cgr/manifest"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+    assert!(!cg_sync::compact_if_due(root).unwrap().compacted, "a save must not trigger an immediate merge");
+    manifest.updated_ms = manifest.updated_ms.saturating_sub(60_000);
+    fs::write(root.join(".cgr/manifest"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+    // Delete every source directory. Re-extraction / re-resolution would change the graph.
+    for entry in fs::read_dir(root).unwrap().flatten() {
+        if entry.file_name() == ".cgr" {
+            continue;
+        }
+        if entry.path().is_dir() {
+            fs::remove_dir_all(entry.path()).unwrap();
+        } else {
+            fs::remove_file(entry.path()).unwrap();
+        }
+    }
+    let guard = store.write_lock(Duration::from_secs(1)).unwrap();
+    assert!(!cg_sync::compact_if_due(root).unwrap().compacted, "maintenance must yield to an active writer");
+    drop(guard);
+    assert!(cg_sync::compact_if_due(root).unwrap().compacted);
+    assert!(store.open_snapshot().unwrap().view.delta.is_none());
+    assert_eq!(before, canonical_of(root));
 }
 
 #[allow(dead_code)]

@@ -578,6 +578,7 @@ pub fn build_draft_at(batches: &[FileBatch], delta: Option<(&[FileId], BuildBase
     let (qname_post_off, qname_post) = postings(names_pool.len(), &hot, bb, |h| StrId(h.qname.0 - bb.names), &skip);
 
     let meta = SegMeta {
+        total_tokens: 0,
         kind: if is_delta { "delta" } else { "base" }.into(),
         format_version: brand::FORMAT_VERSION,
         engine_version: brand::ENGINE_VERSION,
@@ -638,7 +639,7 @@ pub fn build_draft_at(batches: &[FileBatch], delta: Option<(&[FileId], BuildBase
 }
 
 /// CSR of node indexes per string id (ascending node order).
-fn postings(n_strings: usize, hot: &[NodeHot], bb: BuildBase, key: impl Fn(&NodeHot) -> StrId, skip: &impl Fn(u8) -> bool) -> (Vec<u32>, Vec<u32>) {
+pub(crate) fn postings(n_strings: usize, hot: &[NodeHot], bb: BuildBase, key: impl Fn(&NodeHot) -> StrId, skip: &impl Fn(u8) -> bool) -> (Vec<u32>, Vec<u32>) {
     let mut off = vec![0u32; n_strings + 1];
     for h in hot {
         if !skip(h.kind) {

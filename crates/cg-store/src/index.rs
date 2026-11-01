@@ -105,7 +105,8 @@ pub fn build_name_indexes(names: &StrPool, has_post: impl Fn(usize) -> bool + Sy
 pub struct TokenIndex {
     pub fst: Vec<u8>,
     pub post_off: Vec<u32>,
-    pub post: Vec<PostEntry>,
+    pub post: Vec<u8>,
+    pub df: Vec<u32>,
     pub node_norm: Vec<u16>,
 }
 
@@ -270,12 +271,111 @@ pub fn build_token_index(inp: &TokenInputs<'_>) -> TokenIndex {
         post[fill[r] as usize] = PostEntry { node: e.node, mask: e.mask, tf: e.tf, _p: 0 };
         fill[r] += 1;
     }
-    TokenIndex { fst, post_off, post, node_norm: norm }
+    let df: Vec<u32> = post_off.windows(2).map(|w| w[1] - w[0]).collect();
+    let mut encoded = Vec::with_capacity(post.len() * 3);
+    let mut offsets = Vec::with_capacity(post_off.len());
+    offsets.push(0);
+    for range in post_off.windows(2) {
+        encode_postings(&post[range[0] as usize..range[1] as usize], &mut encoded);
+        offsets.push(u32::try_from(encoded.len()).expect("token posting partition exceeds 4 GiB"));
+    }
+    TokenIndex { fst, post_off: offsets, post: encoded, df, node_norm: norm }
+}
+
+fn encode_postings(entries: &[PostEntry], out: &mut Vec<u8>) {
+    let mut previous = 0;
+    for entry in entries {
+        let mut delta = entry.node - previous;
+        previous = entry.node;
+        while delta >= 128 {
+            out.push(delta as u8 | 0x80);
+            delta >>= 7;
+        }
+        out.extend_from_slice(&[delta as u8, entry.mask, entry.tf]);
+    }
+}
+
+/// Allocation-free decoder for one sorted, delta-varint encoded posting list.
+pub struct TokenPostings<'a> {
+    bytes: &'a [u8],
+    previous: u32,
+}
+
+impl<'a> TokenPostings<'a> {
+    pub fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, previous: 0 }
+    }
+}
+
+impl Iterator for TokenPostings<'_> {
+    type Item = PostEntry;
+    fn next(&mut self) -> Option<PostEntry> {
+        let result = self.decode();
+        if result.is_none() {
+            self.bytes = &[];
+        }
+        result
+    }
+}
+
+impl std::iter::FusedIterator for TokenPostings<'_> {}
+
+impl TokenPostings<'_> {
+    fn decode(&mut self) -> Option<PostEntry> {
+        let mut delta = 0u32;
+        for shift in (0..35).step_by(7) {
+            let (&byte, rest) = self.bytes.split_first()?;
+            self.bytes = rest;
+            if shift == 28 && byte > 15 {
+                self.bytes = &[];
+                return None;
+            }
+            delta |= ((byte & 127) as u32) << shift;
+            if byte & 128 == 0 {
+                let node = self.previous.checked_add(delta)?;
+                let entry = PostEntry { node, mask: *self.bytes.first()?, tf: *self.bytes.get(1)?, _p: 0 };
+                self.bytes = &self.bytes[2..];
+                self.previous = node;
+                return Some(entry);
+            }
+        }
+        self.bytes = &[];
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compressed_postings_cover_varint_boundaries_without_losing_fields() {
+        let expected: Vec<_> =
+            [0, 127, 255, 16_639, u32::MAX].into_iter().enumerate().map(|(i, node)| PostEntry { node, mask: 1 << i, tf: i as u8 + 1, _p: 0 }).collect();
+        let mut bytes = Vec::new();
+        encode_postings(&expected, &mut bytes);
+        let decoded: Vec<_> = TokenPostings::new(&bytes).collect();
+        let fields = |p: &PostEntry| (p.node, p.mask, p.tf);
+        assert_eq!(decoded.iter().map(fields).collect::<Vec<_>>(), expected.iter().map(fields).collect::<Vec<_>>());
+        assert_eq!(&bytes[..3], &[0, 1, 1]);
+        assert!(bytes.len() < expected.len() * std::mem::size_of::<PostEntry>());
+    }
+
+    #[test]
+    fn malformed_postings_terminate_without_overflow_or_partial_records() {
+        for bytes in [&[128][..], &[0, 1], &[255, 255, 255, 255, 16, 1, 1], &[255, 255, 255, 255, 255, 1, 1]] {
+            let mut decoder = TokenPostings::new(bytes);
+            assert!(decoder.next().is_none());
+            assert!(decoder.next().is_none());
+        }
+        let mut bytes = Vec::new();
+        encode_postings(&[PostEntry { node: u32::MAX, mask: 1, tf: 1, _p: 0 }], &mut bytes);
+        bytes.extend_from_slice(&[1, 1, 1]);
+        let mut decoder = TokenPostings::new(&bytes);
+        assert_eq!(decoder.next().unwrap().node, u32::MAX);
+        assert!(decoder.next().is_none());
+        assert!(decoder.next().is_none());
+    }
 
     #[test]
     fn name_indexes_find_by_segment_and_trigram() {

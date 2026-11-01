@@ -45,7 +45,8 @@ impl Graph {
             if norm.is_empty() {
                 return 1.0;
             }
-            let sum: u64 = norm.iter().map(|v| *v as u64).sum();
+            // The fallback only serves snapshots produced before the statistic was persisted.
+            let sum: u64 = if self.view.base.meta.total_tokens > 0 { self.view.base.meta.total_tokens } else { norm.iter().map(|v| *v as u64).sum() };
             (sum as f32 / norm.len() as f32).max(1.0)
         })
     }

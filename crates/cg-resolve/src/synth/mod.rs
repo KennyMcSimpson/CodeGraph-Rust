@@ -8,6 +8,7 @@ use crate::engine::Engine;
 use crate::resolve::{Accept, NameRes, WorkerCx};
 use cg_core::{EdgeKind, FileId, Lang, NodeIdx, NodeKind, Provenance, NONE};
 use cg_store::{outkind, EdgeBuild, View};
+use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sites::{PASS_EMITTER, PASS_JSX, PASS_REACT_RENDER, ROLE_EMIT, ROLE_ON};
 use std::collections::BTreeMap;
@@ -27,6 +28,7 @@ const MAX_GO_IMPLEMENTERS: usize = 24;
 /// Go method names that nearly every type has: an interface made only of these says nothing.
 const GENERIC_GO_METHODS: &[&str] = &["String", "Error", "Close", "Read", "Write", "Len", "Less", "Swap", "Reset", "Unwrap", "Is", "As", "Format", "Clone"];
 
+#[derive(Default)]
 struct Out {
     edges: Vec<EdgeBuild>,
     emeta: Vec<String>,
@@ -34,6 +36,24 @@ struct Out {
 }
 
 impl Out {
+    fn append(&mut self, other: Out) {
+        let remap: Vec<_> = other
+            .emeta
+            .into_iter()
+            .map(|meta| {
+                *self.meta_ids.entry(meta.clone()).or_insert_with(|| {
+                    self.emeta.push(meta);
+                    (self.emeta.len() - 1) as u32
+                })
+            })
+            .collect();
+        self.edges.extend(other.edges.into_iter().map(|mut edge| {
+            if edge.meta != NONE {
+                edge.meta = remap[edge.meta as usize];
+            }
+            edge
+        }));
+    }
     #[allow(clippy::too_many_arguments)] // one call site per synthesis pass; a builder would only add noise
     fn push(
         &mut self,
@@ -191,7 +211,7 @@ fn go_implements(e: &Engine<'_>, out: &mut Out) -> Vec<(NodeIdx, NodeIdx)> {
             continue;
         }
         for c in cands {
-            if c != *iface && view.hot(c).file != view.hot(*iface).file || c != *iface {
+            if c != *iface {
                 out.push(EdgeKind::Implements, c, *iface, view.hot(c).start_line, "go-implements", None, None, 10);
                 pairs.push((c, *iface));
             }
@@ -241,33 +261,42 @@ fn interface_impl(e: &Engine<'_>, subs: &FxHashMap<NodeIdx, Vec<NodeIdx>>, out: 
 }
 
 /// `.emit('evt')` in a method -> the named handlers registered with `.on('evt', handler)`.
-fn event_emitter<'e, 'v>(e: &'e Engine<'v>, out: &mut Out, wcx: &mut WorkerCx<'e, 'v>) {
+fn event_emitter<'e, 'v>(e: &'e Engine<'v>, out: &mut Out, wcx: &mut WorkerCx<'e, 'v>, selected: Option<&FxHashSet<String>>) {
+    if selected.is_some_and(|keys| keys.is_empty()) {
+        return;
+    }
     let view = e.view;
     #[derive(Default)]
-    struct Key {
+    struct Key<'a> {
         emitters: Vec<NodeIdx>,
-        handlers: Vec<(NodeIdx, String, u32, FileId)>,
+        handlers: Vec<(NodeIdx, &'a str, u32, FileId)>,
     }
-    let mut keys: BTreeMap<String, Key> = BTreeMap::new();
+    let mut keys: BTreeMap<&str, Key<'_>> = BTreeMap::new();
     for f in view.files() {
         for s in view.sites_of(f) {
             if s.pass != PASS_EMITTER {
                 continue;
             }
-            let event = view.text_str(cg_core::StrId(s.key_a)).to_owned();
+            let event = view.text_str(cg_core::StrId(s.key_a));
+            if selected.is_some_and(|keys| !keys.contains(event)) {
+                continue;
+            }
             let k = keys.entry(event).or_default();
             if s.role == ROLE_EMIT {
                 k.emitters.push(s.node);
             } else if s.role == ROLE_ON {
-                k.handlers.push((s.node, view.text_str(s.payload).to_owned(), s.line, f));
+                k.handlers.push((s.node, view.text_str(s.payload), s.line, f));
             }
         }
     }
-    for (event, mut k) in keys {
+    for k in keys.values_mut() {
         k.emitters.sort();
         k.emitters.dedup();
+    }
+    let connect = |event: &str, k: &Key<'_>, wcx: &mut WorkerCx<'e, 'v>| {
+        let mut out = Out::default();
         if k.emitters.is_empty() || k.emitters.len() > MAX_EMITTERS {
-            continue;
+            return out;
         }
         let mut targets: Vec<(NodeIdx, u32, FileId)> = Vec::new();
         for (reg, handler, line, f) in &k.handlers {
@@ -296,20 +325,41 @@ fn event_emitter<'e, 'v>(e: &'e Engine<'v>, out: &mut Out, wcx: &mut WorkerCx<'e
         targets.sort();
         targets.dedup_by_key(|t| t.0);
         if targets.is_empty() || targets.len() > MAX_HANDLERS {
-            continue;
+            return out;
         }
         for em in &k.emitters {
             for (t, line, f) in &targets {
-                out.push(EdgeKind::Calls, *em, *t, 0, "event-emitter", Some(path_line(view, *f, *line)), Some(("event", &event)), 30);
+                out.push(EdgeKind::Calls, *em, *t, 0, "event-emitter", Some(path_line(view, *f, *line)), Some(("event", event)), 30);
+            }
+        }
+        out
+    };
+    // Indexed collection and ordered merging preserve pass/key precedence regardless of
+    // scheduling. Bound in-flight link outputs to 256 keys; small edits stay sequential.
+    if keys.len() < 32 || rayon::current_num_threads() == 1 {
+        for (event, key) in &keys {
+            out.append(connect(event, key, wcx));
+        }
+    } else {
+        let keys: Vec<_> = keys.into_iter().collect();
+        let per_key = (MAX_EMITTERS * MAX_HANDLERS * (std::mem::size_of::<EdgeBuild>() + 256)) as u64;
+        let keys_per_chunk = (e.budget.synth / 4 / per_key).clamp(1, 256) as usize;
+        for chunk in keys.chunks(keys_per_chunk) {
+            let parts: Vec<_> = chunk.par_iter().map_init(WorkerCx::new, |cx, (event, key)| connect(event, key, cx)).collect();
+            for part in parts {
+                out.append(part);
             }
         }
     }
 }
 
 /// A React class component's method that calls `setState` re-renders the component.
-fn react_render(e: &Engine<'_>, out: &mut Out) {
+fn react_render(e: &Engine<'_>, out: &mut Out, selected: Option<&FxHashSet<u32>>) {
     let view = e.view;
     for f in view.files() {
+        if selected.is_some_and(|files| !files.contains(&f.0)) {
+            continue;
+        }
         let sites: Vec<_> = view.sites_of(f).iter().filter(|s| s.pass == PASS_REACT_RENDER).collect();
         if sites.is_empty() {
             continue;
@@ -331,9 +381,12 @@ fn react_render(e: &Engine<'_>, out: &mut Out) {
 }
 
 /// A component's JSX tag renders the child component it names.
-fn jsx_render<'e, 'v>(e: &'e Engine<'v>, out: &mut Out, wcx: &mut WorkerCx<'e, 'v>) {
+fn jsx_render<'e, 'v>(e: &'e Engine<'v>, out: &mut Out, wcx: &mut WorkerCx<'e, 'v>, selected: Option<&FxHashSet<u32>>) {
     let view = e.view;
     for f in view.files() {
+        if selected.is_some_and(|files| !files.contains(&f.0)) {
+            continue;
+        }
         let sites: Vec<_> = view.sites_of(f).iter().filter(|s| s.pass == PASS_JSX).collect();
         if sites.is_empty() {
             continue;
@@ -358,9 +411,74 @@ pub fn run_all(e: &Engine<'_>) -> SynthOutput {
     let go_pairs = go_implements(e, &mut out);
     let subs = subtypes(e, &go_pairs);
     interface_impl(e, &subs, &mut out);
-    event_emitter(e, &mut out, &mut wcx);
-    react_render(e, &mut out);
-    jsx_render(e, &mut out, &mut wcx);
+    event_emitter(e, &mut out, &mut wcx, None);
+    react_render(e, &mut out, None);
+    jsx_render(e, &mut out, &mut wcx, None);
+    SynthOutput { edges: out.edges, emeta: out.emeta }
+}
+
+/// Reconnect only changed event keys / per-file render sites when the definition and type
+/// tables did not change. Structural changes deliberately use the full pass set.
+pub fn run_incremental(e: &Engine<'_>, previous: &View, changed: &FxHashSet<u32>, remap: &FxHashMap<u32, u32>, structural: bool) -> SynthOutput {
+    if structural {
+        return run_all(e);
+    }
+    let mut keys = FxHashSet::default();
+    for view in [previous, e.view] {
+        for f in view.files().filter(|f| changed.contains(&f.0)) {
+            for s in view.sites_of(f).iter().filter(|s| s.pass == PASS_EMITTER) {
+                keys.insert(view.text_str(cg_core::StrId(s.key_a)).to_owned());
+            }
+        }
+    }
+    let mut out = Out { edges: Vec::new(), emeta: Vec::new(), meta_ids: FxHashMap::default() };
+    // Unchanged keys keep their existing edges, including all provenance and registration
+    // locations. Ids of replaced nodes are remapped even when their meaning did not change.
+    for f in previous.files() {
+        for n in previous.nodes_in_file(f) {
+            for edge in previous.out_edges(NodeIdx(n)).filter(|edge| edge.class == outkind::CLASS_SYNTH) {
+                let meta = previous.edge_meta(edge.eid).unwrap_or("{}");
+                let value: serde_json::Value = serde_json::from_str(meta).unwrap_or_default();
+                let by = value.get("synthesizedBy").and_then(|v| v.as_str()).unwrap_or("");
+                let recompute = match by {
+                    "event-emitter" => value.get("event").and_then(|v| v.as_str()).is_some_and(|key| keys.contains(key)),
+                    "react-render" | "jsx-render" => changed.contains(&f.0),
+                    _ => false,
+                };
+                if recompute {
+                    continue;
+                }
+                let src = remap.get(&edge.src.0).copied().unwrap_or(edge.src.0);
+                let dst = remap.get(&edge.dst.0).copied().unwrap_or(edge.dst.0);
+                if !e.view.is_alive(NodeIdx(src)) || !e.view.is_alive(NodeIdx(dst)) {
+                    continue;
+                }
+                let mid = *out.meta_ids.entry(meta.to_owned()).or_insert_with(|| {
+                    out.emeta.push(meta.to_owned());
+                    (out.emeta.len() - 1) as u32
+                });
+                out.edges.push(EdgeBuild {
+                    src,
+                    dst,
+                    kind: outkind::pack(edge.kind, edge.provenance, edge.class),
+                    line: if changed.contains(&f.0) && matches!(by, "interface-impl" | "go-implements" | "go-method-contains") {
+                        e.view.hot(NodeIdx(src)).start_line
+                    } else {
+                        edge.line.unwrap_or(NONE)
+                    },
+                    col: edge.col.unwrap_or(NONE),
+                    res: edge.res,
+                    ref_idx: NONE,
+                    meta: mid,
+                    order: 0,
+                });
+            }
+        }
+    }
+    let mut wcx = WorkerCx::new();
+    event_emitter(e, &mut out, &mut wcx, Some(&keys));
+    react_render(e, &mut out, Some(changed));
+    jsx_render(e, &mut out, &mut wcx, Some(changed));
     SynthOutput { edges: out.edges, emeta: out.emeta }
 }
 
