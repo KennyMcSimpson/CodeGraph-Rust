@@ -126,8 +126,11 @@ fn value_info(cx: &Cx, v: Node) -> (String, String) {
             let c = v.child_by_field_name("constructor").map(|c| cx.text(c).to_owned()).unwrap_or_default();
             (String::new(), c)
         }
-        "await_expression" | "parenthesized_expression" | "non_null_expression" => v.named_child(0).map(|c| value_info(cx, c)).unwrap_or_default(),
-        "as_expression" | "satisfies_expression" => {
+        // `satisfies` checks a constraint without replacing the operand's type.
+        "await_expression" | "parenthesized_expression" | "non_null_expression" | "satisfies_expression" => {
+            v.named_child(0).map(|c| value_info(cx, c)).unwrap_or_default()
+        }
+        "as_expression" => {
             let t = v.named_child(1).map(|c| ts_type_name(cx, c)).unwrap_or_default();
             (t, String::new())
         }

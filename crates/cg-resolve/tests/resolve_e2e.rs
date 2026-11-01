@@ -78,6 +78,57 @@ export class Widget extends Base {
 }
 
 #[test]
+fn typescript_satisfies_keeps_concrete_call_targets() {
+    let (_d, view) = project(&[
+        ("service.ts", "export interface Runner { run(): void }\nexport class Service { run() {} extra() {} }\nexport function makeService(): Service { return new Service(); }\n"),
+        (
+            "app.ts",
+            r#"import { Runner, Service, makeService } from './service';
+export function direct() {
+    const service = new Service() satisfies Runner;
+    service.run();
+    service.extra();
+}
+export function factory() {
+    const service = makeService() satisfies Runner;
+    service.run();
+    service.extra();
+}
+export function plainFactory() {
+    const service = makeService();
+    service.run();
+    service.extra();
+}
+export class Holder {
+    service = new Service() satisfies Runner;
+    use() { this.service.run(); this.service.extra(); }
+}
+export function asserted() {
+    const service = (new Service() as Runner) satisfies object;
+    service.run();
+}
+"#,
+        ),
+    ]);
+    let edges = dump::dump_edges(&view);
+    for caller in ["app.ts::direct", "app.ts::Holder::use"] {
+        for method in ["run", "extra"] {
+            assert!(
+                has(&edges, &format!("{caller} -calls-> service.ts::Service::{method}")),
+                "{caller} must retain the initializer's concrete receiver: {edges:#?}"
+            );
+        }
+        assert!(!has(&edges, &format!("{caller} -calls-> service.ts::Runner::run")), "satisfies must not replace the receiver with its constraint");
+    }
+    let call_targets = |caller: &str| {
+        let prefix = format!("app.ts::{caller} -calls-> ");
+        edges.iter().filter_map(|edge| edge.strip_prefix(&prefix)).collect::<Vec<_>>()
+    };
+    assert_eq!(call_targets("factory"), call_targets("plainFactory"), "satisfies must preserve the existing factory inference behavior");
+    assert!(has(&edges, "app.ts::asserted -calls-> service.ts::Runner::run"), "an inner as assertion still supplies its explicit type");
+}
+
+#[test]
 fn python_modules_and_self() {
     let (_d, view) = project(&[
         ("pkg/__init__.py", "from .core import Engine\n"),
