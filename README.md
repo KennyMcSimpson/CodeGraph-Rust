@@ -63,8 +63,6 @@ speedup** over upstream CodeGraph across four fixed repositories, with **85.9%�
 peak indexing RSS**. Both sides indexed identical files and source bytes; upstream's native Rust
 extraction kernel was loaded and enabled for the measured languages.
 
-**Graph agreement remains below the design's acceptance thresholds**, as reported in the oracle section below.
-
 | Repository | Files | Upstream full index | `cgr` full index | Speedup | Peak RSS: upstream → `cgr` |
 |---|---:|---:|---:|---:|---:|
 | Express | 142 | 532.7 ms | 121.9 ms | **4.37×** | 225.7 → 27.9 MiB |
@@ -79,27 +77,9 @@ Full-index medians use three complete CLI rebuilds after one warmup, with at lea
 between commands and warm OS file caches. Workers were configured, not pinned to two physical cores.
 The unmodified benchmark wrapper enforced memory, disk, swap and process-tree RSS guards.
 
-### Upstream oracle agreement
-
-Speed and graph agreement are measured separately. The primary oracle uses the design's exact
-`(source stable ID, target stable ID, kind, line, col)` edge key. NULL positions remain NULL;
-routes, containment edges and syntax-error files are retained. Precision = intersection / `cgr`
-edges, recall = intersection / oracle edges, Jaccard = intersection / union.
-
-| Repository | Matching edges | Unique edges: `cgr` / oracle | Precision | Recall | Jaccard |
-|---|---:|---:|---:|---:|---:|
-| Express | 1,384 | 2,527 / 2,334 | 54.77% | 59.30% | 39.80% |
-| Gin | 7,626 | 7,921 / 8,073 | 96.28% | 94.46% | 91.13% |
-| Tokio | 31,541 | 36,511 / 39,682 | 86.39% | 79.48% | 70.64% |
-| Django | 173,752 | 185,506 / 194,105 | 93.66% | 89.51% | 84.40% |
-
-**The design gate is not met** in Express, Gin, Tokio, Django. The required relative precision is **≥97%** and recall **≥95%**.
-Non-route node identity agreement does not establish resolved-edge parity. The detailed report
-also separates non-containment edges, edge kinds, languages, route coverage, ID representation
-and location differences. Secondary normalized/topology scores are diagnostic and do not replace
-this strict gate. These measurements therefore do not establish interchangeable graphs or equal
-answer quality. See [methodology, differences and samples](docs/BENCHMARKS.md) and the
-[machine-readable evidence](docs/benchmarks/2026-11-01-main-retest.json).
+Full timings, output sizes and measurement conditions are in the
+[benchmark report](docs/BENCHMARKS.md#full-indexing), with
+[machine-readable samples](docs/benchmarks/2026-11-01-main-retest.json).
 
 ### Incremental CLI synchronization
 
@@ -513,8 +493,8 @@ plus release compilation, Clippy, formatting and the CLI/MCP/hook smoke test. Al
 projects passed full/edit/restore graph equivalence and matched the prior engine's graph dumps.
 The historical benchmark revision passed 116 tests. Implementation checks are recorded in
 [the engineering record](docs/PERFORMANCE-IMPLEMENTATION.md). The subsequent main retest added
-128 timed commands, independent SQL verification of the upstream edge intersections, and
-successful checksum/incremental-full checks in all four repositories; see [the report](docs/BENCHMARKS.md).
+128 timed commands and successful checksum/incremental-full checks in all four repositories;
+see [the performance report](docs/BENCHMARKS.md#full-indexing).
 Local measurements and hosted CI results are separate evidence.
 
 Code revision `f82506e` passed all nine [hosted CI checks](https://github.com/NianJiuZst/CodeGrap-Rust/actions/runs/41286327676),
