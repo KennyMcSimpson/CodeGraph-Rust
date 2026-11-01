@@ -1,5 +1,8 @@
 # Six-repository main retest / 六仓库 main 复测（部分完成）
 
+A subsequent [graph difference investigation](GRAPH-DIAGNOSTICS-2026-11-01.md)
+traces the JavaScript and TypeScript gaps and includes a controlled Zod manifest experiment.
+
 The six-repository retest covers full indexing and strict graph agreement at `edb403e`,
 with upstream `d2e0389`. It adds TypeScript (Zod) and Kotlin/Java (OkHttp) to the
 previous four repositories. Index speedup geometric mean is **4.77×** and median peak
