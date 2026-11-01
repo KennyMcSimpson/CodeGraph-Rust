@@ -1,0 +1,1725 @@
+{
+  "schemaVersion": 1,
+  "dateUtc": "2026-11-01T12:35:51.405787+00:00",
+  "baseCommit": "4090af13757edc0b079b87128eaaf78234d7b0c0",
+  "runtimeCommit": "0d48a07caa67791e64dccf015922a877ab3f9fee",
+  "upstreamCommit": "d2e0389b519be398f9bc616b6f7bea8a7edfbc6a",
+  "corpora": {
+    "express": {
+      "repository": "expressjs/express",
+      "commit": "1c6f1b0fe4000977b9a7b4f34097e4d527dd9824"
+    },
+    "gin": {
+      "repository": "gin-gonic/gin",
+      "commit": "0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646"
+    },
+    "tokio": {
+      "repository": "tokio-rs/tokio",
+      "commit": "b499257ef62bd631b83a988d371f4330f545670c"
+    },
+    "django": {
+      "repository": "django/django",
+      "commit": "a05e16a7230fe33d3f43f4a3aaed103cebb42efc"
+    }
+  },
+  "engineVersion": 4,
+  "formatVersion": 2,
+  "build": {
+    "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+    "profile": "release",
+    "threads": 2,
+    "memoryMiB": 2048,
+    "beforeBinarySha256": "3a4b08edcd2e447f4af77416ece3d288351c316f3175b0460e3aea193eb2f3b0",
+    "afterBinarySha256": "07eca1a63e38f65df51334cdfd4ebeeedce0a07a8bc545c50105adc946ffc8b1"
+  },
+  "definitions": {
+    "strictKey": [
+      "sourceStableId",
+      "targetStableId",
+      "kind",
+      "line",
+      "column"
+    ],
+    "strictPrecision": "|C intersect O| / |C|",
+    "strictRecall": "|C intersect O| / |O|",
+    "callSiteKey": [
+      "sourceStableId",
+      "kind=calls",
+      "line",
+      "column"
+    ],
+    "supportedCallSet": "E = cgr call edges whose callSiteKey occurs in an upstream call edge",
+    "supportedCallPrecision": "|C_calls intersect O_calls| / |E|",
+    "supportedCallRecall": "|C_calls intersect O_calls| / |O_calls|; unchanged full upstream call denominator",
+    "additionalUnlabeledEdges": "|C_calls minus E|; neither successes nor errors without semantic review",
+    "nullLocations": "preserved as NULL, distinct from zero",
+    "deduplication": "unique complete edge keys",
+    "macroAverage": "arithmetic mean over the four repositories; micro counts use repository-prefixed keys",
+    "upstreamIsSemanticGroundTruth": false,
+    "allEdgesRetainedInStrictMetric": true,
+    "newMetricChangeIsAnAlgorithmicGain": false
+  },
+  "aggregates": {
+    "before": {
+      "strict": {
+        "cgr": 235299,
+        "oracle": 244194,
+        "intersection": 217395,
+        "precision": 0.9239095788762384,
+        "recall": 0.8902552888277353,
+        "macroPrecision": 0.8340554340930687,
+        "macroRecall": 0.8947888469163985
+      },
+      "oracleSupportedCalls": {
+        "cgr": 60100,
+        "oracle": 77518,
+        "intersection": 58466,
+        "precision": 0.9728119800332778,
+        "recall": 0.7542248252018886,
+        "macroPrecision": 0.9804811405513064,
+        "macroRecall": 0.7968708679133604
+      }
+    },
+    "after": {
+      "strict": {
+        "cgr": 235866,
+        "oracle": 244194,
+        "intersection": 218272,
+        "precision": 0.925406798775576,
+        "recall": 0.8938466956600081,
+        "macroPrecision": 0.8350463442494904,
+        "macroRecall": 0.8985090880774276
+      },
+      "oracleSupportedCalls": {
+        "cgr": 60673,
+        "oracle": 77518,
+        "intersection": 59181,
+        "precision": 0.975409160582137,
+        "recall": 0.763448489383111,
+        "macroPrecision": 0.981334922064601,
+        "macroRecall": 0.8062685931266466
+      }
+    }
+  },
+  "sharedEdgeChanges": {
+    "addedShared": 980,
+    "removedShared": 103,
+    "netShared": 877
+  },
+  "projects": [
+    {
+      "repo": "express",
+      "sourceDigest": "c39abc479d71163b943ac64b92be04fe71520805fc8e0ffe6948d61d11e61603",
+      "files": 142,
+      "changes": {
+        "added": 12,
+        "removed": 12,
+        "addedShared": 0,
+        "removedShared": 1
+      },
+      "before": {
+        "strict": {
+          "cgr": 3499,
+          "oracle": 2334,
+          "intersection": 2063,
+          "cgrOnly": 1436,
+          "oracleOnly": 271,
+          "precision": 0.5895970277222063,
+          "recall": 0.8838903170522708,
+          "f1": 0.707354705983199,
+          "jaccard": 0.5472148541114058
+        },
+        "oracleSupportedCalls": {
+          "cgr": 1105,
+          "oracle": 1280,
+          "intersection": 1097,
+          "cgrOnly": 8,
+          "oracleOnly": 183,
+          "precision": 0.9927601809954751,
+          "recall": 0.85703125,
+          "f1": 0.9199161425576521,
+          "jaccard": 0.8517080745341615,
+          "allCgrCalls": 2227,
+          "additionalUnlabeledEdges": 1122
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 2227,
+            "oracle": 1280,
+            "intersection": 1097,
+            "cgrOnly": 1130,
+            "oracleOnly": 183,
+            "precision": 0.49259092950157163,
+            "recall": 0.85703125,
+            "f1": 0.6256059309951526,
+            "jaccard": 0.45518672199170124
+          },
+          "contains": {
+            "cgr": 992,
+            "oracle": 724,
+            "intersection": 724,
+            "cgrOnly": 268,
+            "oracleOnly": 0,
+            "precision": 0.7298387096774194,
+            "recall": 1.0,
+            "f1": 0.8438228438228438,
+            "jaccard": 0.7298387096774194
+          },
+          "imports": {
+            "cgr": 143,
+            "oracle": 154,
+            "intersection": 143,
+            "cgrOnly": 0,
+            "oracleOnly": 11,
+            "precision": 1.0,
+            "recall": 0.9285714285714286,
+            "f1": 0.962962962962963,
+            "jaccard": 0.9285714285714286
+          },
+          "instantiates": {
+            "cgr": 23,
+            "oracle": 84,
+            "intersection": 23,
+            "cgrOnly": 0,
+            "oracleOnly": 61,
+            "precision": 1.0,
+            "recall": 0.27380952380952384,
+            "f1": 0.4299065420560748,
+            "jaccard": 0.27380952380952384
+          },
+          "references": {
+            "cgr": 114,
+            "oracle": 92,
+            "intersection": 76,
+            "cgrOnly": 38,
+            "oracleOnly": 16,
+            "precision": 0.6666666666666666,
+            "recall": 0.8260869565217391,
+            "f1": 0.7378640776699029,
+            "jaccard": 0.5846153846153846
+          }
+        }
+      },
+      "after": {
+        "strict": {
+          "cgr": 3499,
+          "oracle": 2334,
+          "intersection": 2062,
+          "cgrOnly": 1437,
+          "oracleOnly": 272,
+          "precision": 0.5893112317805087,
+          "recall": 0.8834618680377035,
+          "f1": 0.7070118292473856,
+          "jaccard": 0.5468045611243701
+        },
+        "oracleSupportedCalls": {
+          "cgr": 1105,
+          "oracle": 1280,
+          "intersection": 1097,
+          "cgrOnly": 8,
+          "oracleOnly": 183,
+          "precision": 0.9927601809954751,
+          "recall": 0.85703125,
+          "f1": 0.9199161425576521,
+          "jaccard": 0.8517080745341615,
+          "allCgrCalls": 2227,
+          "additionalUnlabeledEdges": 1122
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 2227,
+            "oracle": 1280,
+            "intersection": 1097,
+            "cgrOnly": 1130,
+            "oracleOnly": 183,
+            "precision": 0.49259092950157163,
+            "recall": 0.85703125,
+            "f1": 0.6256059309951526,
+            "jaccard": 0.45518672199170124
+          },
+          "contains": {
+            "cgr": 992,
+            "oracle": 724,
+            "intersection": 724,
+            "cgrOnly": 268,
+            "oracleOnly": 0,
+            "precision": 0.7298387096774194,
+            "recall": 1.0,
+            "f1": 0.8438228438228438,
+            "jaccard": 0.7298387096774194
+          },
+          "imports": {
+            "cgr": 143,
+            "oracle": 154,
+            "intersection": 143,
+            "cgrOnly": 0,
+            "oracleOnly": 11,
+            "precision": 1.0,
+            "recall": 0.9285714285714286,
+            "f1": 0.962962962962963,
+            "jaccard": 0.9285714285714286
+          },
+          "instantiates": {
+            "cgr": 23,
+            "oracle": 84,
+            "intersection": 23,
+            "cgrOnly": 0,
+            "oracleOnly": 61,
+            "precision": 1.0,
+            "recall": 0.27380952380952384,
+            "f1": 0.4299065420560748,
+            "jaccard": 0.27380952380952384
+          },
+          "references": {
+            "cgr": 114,
+            "oracle": 92,
+            "intersection": 75,
+            "cgrOnly": 39,
+            "oracleOnly": 17,
+            "precision": 0.6578947368421053,
+            "recall": 0.8152173913043478,
+            "f1": 0.7281553398058253,
+            "jaccard": 0.5725190839694656
+          }
+        }
+      }
+    },
+    {
+      "repo": "gin",
+      "sourceDigest": "62fea02b516804db33f5a7ed817a55b306d40d485847dcaeef87987ad8566b09",
+      "files": 99,
+      "changes": {
+        "added": 0,
+        "removed": 3,
+        "addedShared": 0,
+        "removedShared": 0
+      },
+      "before": {
+        "strict": {
+          "cgr": 8216,
+          "oracle": 8073,
+          "intersection": 7678,
+          "cgrOnly": 538,
+          "oracleOnly": 395,
+          "precision": 0.9345180136319376,
+          "recall": 0.9510714728106032,
+          "f1": 0.9427220823868868,
+          "jaccard": 0.8916502148414819
+        },
+        "oracleSupportedCalls": {
+          "cgr": 3487,
+          "oracle": 3807,
+          "intersection": 3482,
+          "cgrOnly": 5,
+          "oracleOnly": 325,
+          "precision": 0.998566102667049,
+          "recall": 0.9146309429997374,
+          "f1": 0.9547573347957226,
+          "jaccard": 0.9134312696747114,
+          "allCgrCalls": 3494,
+          "additionalUnlabeledEdges": 7
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 3494,
+            "oracle": 3807,
+            "intersection": 3482,
+            "cgrOnly": 12,
+            "oracleOnly": 325,
+            "precision": 0.996565540927304,
+            "recall": 0.9146309429997374,
+            "f1": 0.9538419394603479,
+            "jaccard": 0.911757004451427
+          },
+          "contains": {
+            "cgr": 2972,
+            "oracle": 2767,
+            "intersection": 2731,
+            "cgrOnly": 241,
+            "oracleOnly": 36,
+            "precision": 0.9189098250336474,
+            "recall": 0.9869895193350199,
+            "f1": 0.9517337515246559,
+            "jaccard": 0.9079122340425532
+          },
+          "extends": {
+            "cgr": 13,
+            "oracle": 11,
+            "intersection": 11,
+            "cgrOnly": 2,
+            "oracleOnly": 0,
+            "precision": 0.8461538461538461,
+            "recall": 1.0,
+            "f1": 0.9166666666666666,
+            "jaccard": 0.8461538461538461
+          },
+          "implements": {
+            "cgr": 81,
+            "oracle": 93,
+            "intersection": 78,
+            "cgrOnly": 3,
+            "oracleOnly": 15,
+            "precision": 0.9629629629629629,
+            "recall": 0.8387096774193549,
+            "f1": 0.896551724137931,
+            "jaccard": 0.8125
+          },
+          "imports": {
+            "cgr": 31,
+            "oracle": 0,
+            "intersection": 0,
+            "cgrOnly": 31,
+            "oracleOnly": 0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "jaccard": 0.0
+          },
+          "instantiates": {
+            "cgr": 833,
+            "oracle": 833,
+            "intersection": 833,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "references": {
+            "cgr": 792,
+            "oracle": 562,
+            "intersection": 543,
+            "cgrOnly": 249,
+            "oracleOnly": 19,
+            "precision": 0.6856060606060606,
+            "recall": 0.9661921708185054,
+            "f1": 0.8020679468242246,
+            "jaccard": 0.6695437731196054
+          }
+        }
+      },
+      "after": {
+        "strict": {
+          "cgr": 8213,
+          "oracle": 8073,
+          "intersection": 7678,
+          "cgrOnly": 535,
+          "oracleOnly": 395,
+          "precision": 0.934859369292585,
+          "recall": 0.9510714728106032,
+          "f1": 0.9428957386712513,
+          "jaccard": 0.8919609665427509
+        },
+        "oracleSupportedCalls": {
+          "cgr": 3487,
+          "oracle": 3807,
+          "intersection": 3482,
+          "cgrOnly": 5,
+          "oracleOnly": 325,
+          "precision": 0.998566102667049,
+          "recall": 0.9146309429997374,
+          "f1": 0.9547573347957226,
+          "jaccard": 0.9134312696747114,
+          "allCgrCalls": 3491,
+          "additionalUnlabeledEdges": 4
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 3491,
+            "oracle": 3807,
+            "intersection": 3482,
+            "cgrOnly": 9,
+            "oracleOnly": 325,
+            "precision": 0.9974219421369235,
+            "recall": 0.9146309429997374,
+            "f1": 0.9542340367223897,
+            "jaccard": 0.9124737945492662
+          },
+          "contains": {
+            "cgr": 2972,
+            "oracle": 2767,
+            "intersection": 2731,
+            "cgrOnly": 241,
+            "oracleOnly": 36,
+            "precision": 0.9189098250336474,
+            "recall": 0.9869895193350199,
+            "f1": 0.9517337515246559,
+            "jaccard": 0.9079122340425532
+          },
+          "extends": {
+            "cgr": 13,
+            "oracle": 11,
+            "intersection": 11,
+            "cgrOnly": 2,
+            "oracleOnly": 0,
+            "precision": 0.8461538461538461,
+            "recall": 1.0,
+            "f1": 0.9166666666666666,
+            "jaccard": 0.8461538461538461
+          },
+          "implements": {
+            "cgr": 81,
+            "oracle": 93,
+            "intersection": 78,
+            "cgrOnly": 3,
+            "oracleOnly": 15,
+            "precision": 0.9629629629629629,
+            "recall": 0.8387096774193549,
+            "f1": 0.896551724137931,
+            "jaccard": 0.8125
+          },
+          "imports": {
+            "cgr": 31,
+            "oracle": 0,
+            "intersection": 0,
+            "cgrOnly": 31,
+            "oracleOnly": 0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "jaccard": 0.0
+          },
+          "instantiates": {
+            "cgr": 833,
+            "oracle": 833,
+            "intersection": 833,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "references": {
+            "cgr": 792,
+            "oracle": 562,
+            "intersection": 543,
+            "cgrOnly": 249,
+            "oracleOnly": 19,
+            "precision": 0.6856060606060606,
+            "recall": 0.9661921708185054,
+            "f1": 0.8020679468242246,
+            "jaccard": 0.6695437731196054
+          }
+        }
+      }
+    },
+    {
+      "repo": "tokio",
+      "sourceDigest": "714f5d8b2c0dc196ff30e98fbeba0bc5efc48caf695cfeb3f4d1360296f2f30b",
+      "files": 814,
+      "changes": {
+        "added": 779,
+        "removed": 268,
+        "addedShared": 588,
+        "removedShared": 50
+      },
+      "before": {
+        "strict": {
+          "cgr": 38603,
+          "oracle": 39682,
+          "intersection": 33638,
+          "cgrOnly": 4965,
+          "oracleOnly": 6044,
+          "precision": 0.8713830531305857,
+          "recall": 0.8476891285721486,
+          "f1": 0.8593728044963914,
+          "jaccard": 0.7534212825049835
+        },
+        "oracleSupportedCalls": {
+          "cgr": 10516,
+          "oracle": 15605,
+          "intersection": 10058,
+          "cgrOnly": 458,
+          "oracleOnly": 5547,
+          "precision": 0.9564473183720046,
+          "recall": 0.6445370073694329,
+          "f1": 0.7701083419470924,
+          "jaccard": 0.6261594969806388,
+          "allCgrCalls": 11010,
+          "additionalUnlabeledEdges": 494
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 11010,
+            "oracle": 15605,
+            "intersection": 10058,
+            "cgrOnly": 952,
+            "oracleOnly": 5547,
+            "precision": 0.9135331516802907,
+            "recall": 0.6445370073694329,
+            "f1": 0.755814390381364,
+            "jaccard": 0.607477199975841
+          },
+          "contains": {
+            "cgr": 17053,
+            "oracle": 17053,
+            "intersection": 17053,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "extends": {
+            "cgr": 2,
+            "oracle": 2,
+            "intersection": 2,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "implements": {
+            "cgr": 132,
+            "oracle": 132,
+            "intersection": 132,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "imports": {
+            "cgr": 3329,
+            "oracle": 2326,
+            "intersection": 2080,
+            "cgrOnly": 1249,
+            "oracleOnly": 246,
+            "precision": 0.6248122559327125,
+            "recall": 0.8942390369733448,
+            "f1": 0.735632183908046,
+            "jaccard": 0.5818181818181818
+          },
+          "instantiates": {
+            "cgr": 945,
+            "oracle": 818,
+            "intersection": 774,
+            "cgrOnly": 171,
+            "oracleOnly": 44,
+            "precision": 0.819047619047619,
+            "recall": 0.9462102689486552,
+            "f1": 0.8780487804878048,
+            "jaccard": 0.782608695652174
+          },
+          "references": {
+            "cgr": 6132,
+            "oracle": 3746,
+            "intersection": 3539,
+            "cgrOnly": 2593,
+            "oracleOnly": 207,
+            "precision": 0.577136333985649,
+            "recall": 0.9447410571276028,
+            "f1": 0.7165418100830127,
+            "jaccard": 0.5582899510963875
+          }
+        }
+      },
+      "after": {
+        "strict": {
+          "cgr": 39114,
+          "oracle": 39682,
+          "intersection": 34176,
+          "cgrOnly": 4938,
+          "oracleOnly": 5506,
+          "precision": 0.8737536431968094,
+          "recall": 0.8612469129580163,
+          "f1": 0.8674552007716128,
+          "jaccard": 0.7659345584939489
+        },
+        "oracleSupportedCalls": {
+          "cgr": 11083,
+          "oracle": 15605,
+          "intersection": 10596,
+          "cgrOnly": 487,
+          "oracleOnly": 5009,
+          "precision": 0.9560588288369575,
+          "recall": 0.6790131368151233,
+          "f1": 0.7940647482014388,
+          "jaccard": 0.6584638329604773,
+          "allCgrCalls": 11545,
+          "additionalUnlabeledEdges": 462
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 11545,
+            "oracle": 15605,
+            "intersection": 10596,
+            "cgrOnly": 949,
+            "oracleOnly": 5009,
+            "precision": 0.9177999133824166,
+            "recall": 0.6790131368151233,
+            "f1": 0.7805524861878453,
+            "jaccard": 0.6400869880391447
+          },
+          "contains": {
+            "cgr": 17053,
+            "oracle": 17053,
+            "intersection": 17053,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "extends": {
+            "cgr": 2,
+            "oracle": 2,
+            "intersection": 2,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "implements": {
+            "cgr": 132,
+            "oracle": 132,
+            "intersection": 132,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "imports": {
+            "cgr": 3329,
+            "oracle": 2326,
+            "intersection": 2080,
+            "cgrOnly": 1249,
+            "oracleOnly": 246,
+            "precision": 0.6248122559327125,
+            "recall": 0.8942390369733448,
+            "f1": 0.735632183908046,
+            "jaccard": 0.5818181818181818
+          },
+          "instantiates": {
+            "cgr": 943,
+            "oracle": 818,
+            "intersection": 774,
+            "cgrOnly": 169,
+            "oracleOnly": 44,
+            "precision": 0.8207847295864263,
+            "recall": 0.9462102689486552,
+            "f1": 0.8790459965928449,
+            "jaccard": 0.78419452887538
+          },
+          "references": {
+            "cgr": 6110,
+            "oracle": 3746,
+            "intersection": 3539,
+            "cgrOnly": 2571,
+            "oracleOnly": 207,
+            "precision": 0.579214402618658,
+            "recall": 0.9447410571276028,
+            "f1": 0.7181412337662338,
+            "jaccard": 0.5602342884280513
+          }
+        }
+      }
+    },
+    {
+      "repo": "django",
+      "sourceDigest": "3d77c24c790cfce7a0ebd2b6b8adc0ac91fb6f7df15daf98bba248334ad915ff",
+      "files": 2984,
+      "changes": {
+        "added": 557,
+        "removed": 498,
+        "addedShared": 392,
+        "removedShared": 52
+      },
+      "before": {
+        "strict": {
+          "cgr": 184981,
+          "oracle": 194105,
+          "intersection": 174016,
+          "cgrOnly": 10965,
+          "oracleOnly": 20089,
+          "precision": 0.9407236418875452,
+          "recall": 0.896504469230571,
+          "f1": 0.918081912811341,
+          "jaccard": 0.8485687813917199
+        },
+        "oracleSupportedCalls": {
+          "cgr": 44992,
+          "oracle": 56826,
+          "intersection": 43829,
+          "cgrOnly": 1163,
+          "oracleOnly": 12997,
+          "precision": 0.974150960170697,
+          "recall": 0.7712842712842712,
+          "f1": 0.8609283230862912,
+          "jaccard": 0.7558157581610305,
+          "allCgrCalls": 48105,
+          "additionalUnlabeledEdges": 3113
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 48105,
+            "oracle": 56826,
+            "intersection": 43829,
+            "cgrOnly": 4276,
+            "oracleOnly": 12997,
+            "precision": 0.9111111111111111,
+            "recall": 0.7712842712842712,
+            "f1": 0.8353870638800736,
+            "jaccard": 0.7173087623973029
+          },
+          "contains": {
+            "cgr": 59676,
+            "oracle": 58931,
+            "intersection": 58931,
+            "cgrOnly": 745,
+            "oracleOnly": 0,
+            "precision": 0.98751591929754,
+            "recall": 1.0,
+            "f1": 0.9937187518443262,
+            "jaccard": 0.98751591929754
+          },
+          "decorates": {
+            "cgr": 261,
+            "oracle": 536,
+            "intersection": 260,
+            "cgrOnly": 1,
+            "oracleOnly": 276,
+            "precision": 0.9961685823754789,
+            "recall": 0.48507462686567165,
+            "f1": 0.6524466750313677,
+            "jaccard": 0.48417132216014896
+          },
+          "extends": {
+            "cgr": 9384,
+            "oracle": 9359,
+            "intersection": 9283,
+            "cgrOnly": 101,
+            "oracleOnly": 76,
+            "precision": 0.9892369991474851,
+            "recall": 0.9918794743028101,
+            "f1": 0.9905564744171158,
+            "jaccard": 0.9812896405919662
+          },
+          "imports": {
+            "cgr": 19854,
+            "oracle": 24349,
+            "intersection": 19844,
+            "cgrOnly": 10,
+            "oracleOnly": 4505,
+            "precision": 0.9994963231590611,
+            "recall": 0.8149821347899298,
+            "f1": 0.8978576114743342,
+            "jaccard": 0.8146475635288805
+          },
+          "instantiates": {
+            "cgr": 30943,
+            "oracle": 31205,
+            "intersection": 30482,
+            "cgrOnly": 461,
+            "oracleOnly": 723,
+            "precision": 0.9851016384965905,
+            "recall": 0.9768306361160071,
+            "f1": 0.9809487030958358,
+            "jaccard": 0.9626097391524032
+          },
+          "references": {
+            "cgr": 16758,
+            "oracle": 12899,
+            "intersection": 11387,
+            "cgrOnly": 5371,
+            "oracleOnly": 1512,
+            "precision": 0.6794963599474878,
+            "recall": 0.8827816109775951,
+            "f1": 0.7679131402367063,
+            "jaccard": 0.6232621784345922
+          }
+        }
+      },
+      "after": {
+        "strict": {
+          "cgr": 185040,
+          "oracle": 194105,
+          "intersection": 174356,
+          "cgrOnly": 10684,
+          "oracleOnly": 19749,
+          "precision": 0.9422611327280588,
+          "recall": 0.8982560985033874,
+          "f1": 0.9197325561460655,
+          "jaccard": 0.8513933853869105
+        },
+        "oracleSupportedCalls": {
+          "cgr": 44998,
+          "oracle": 56826,
+          "intersection": 44006,
+          "cgrOnly": 992,
+          "oracleOnly": 12820,
+          "precision": 0.9779545757589226,
+          "recall": 0.7743990426917257,
+          "f1": 0.8643541797611565,
+          "jaccard": 0.761112456328479,
+          "allCgrCalls": 48128,
+          "additionalUnlabeledEdges": 3130
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 48128,
+            "oracle": 56826,
+            "intersection": 44006,
+            "cgrOnly": 4122,
+            "oracleOnly": 12820,
+            "precision": 0.9143533909574468,
+            "recall": 0.7743990426917257,
+            "f1": 0.8385769003563465,
+            "jaccard": 0.7220253330708145
+          },
+          "contains": {
+            "cgr": 59676,
+            "oracle": 58931,
+            "intersection": 58931,
+            "cgrOnly": 745,
+            "oracleOnly": 0,
+            "precision": 0.98751591929754,
+            "recall": 1.0,
+            "f1": 0.9937187518443262,
+            "jaccard": 0.98751591929754
+          },
+          "decorates": {
+            "cgr": 261,
+            "oracle": 536,
+            "intersection": 260,
+            "cgrOnly": 1,
+            "oracleOnly": 276,
+            "precision": 0.9961685823754789,
+            "recall": 0.48507462686567165,
+            "f1": 0.6524466750313677,
+            "jaccard": 0.48417132216014896
+          },
+          "extends": {
+            "cgr": 9384,
+            "oracle": 9359,
+            "intersection": 9283,
+            "cgrOnly": 101,
+            "oracleOnly": 76,
+            "precision": 0.9892369991474851,
+            "recall": 0.9918794743028101,
+            "f1": 0.9905564744171158,
+            "jaccard": 0.9812896405919662
+          },
+          "imports": {
+            "cgr": 19854,
+            "oracle": 24349,
+            "intersection": 19844,
+            "cgrOnly": 10,
+            "oracleOnly": 4505,
+            "precision": 0.9994963231590611,
+            "recall": 0.8149821347899298,
+            "f1": 0.8978576114743342,
+            "jaccard": 0.8146475635288805
+          },
+          "instantiates": {
+            "cgr": 30943,
+            "oracle": 31205,
+            "intersection": 30482,
+            "cgrOnly": 461,
+            "oracleOnly": 723,
+            "precision": 0.9851016384965905,
+            "recall": 0.9768306361160071,
+            "f1": 0.9809487030958358,
+            "jaccard": 0.9626097391524032
+          },
+          "references": {
+            "cgr": 16794,
+            "oracle": 12899,
+            "intersection": 11550,
+            "cgrOnly": 5244,
+            "oracleOnly": 1349,
+            "precision": 0.6877456234369418,
+            "recall": 0.8954182494767036,
+            "f1": 0.7779611356211903,
+            "jaccard": 0.6366091605577909
+          }
+        }
+      }
+    }
+  ],
+  "validation": {
+    "focusedBefore": {
+      "passed": 59,
+      "total": 80,
+      "positivePassed": 30,
+      "positiveTotal": 46,
+      "negativePassed": 28,
+      "negativeTotal": 33,
+      "otherChecks": 1
+    },
+    "focusedAfter": {
+      "passed": 80,
+      "total": 80,
+      "positivePassed": 46,
+      "positiveTotal": 46,
+      "negativePassed": 33,
+      "negativeTotal": 33,
+      "otherChecks": 1
+    },
+    "focusedResults": [
+      {
+        "case": "js_member_not_free",
+        "source": "render",
+        "target": "format",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "js_member_not_free",
+        "source": "direct",
+        "target": "format",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "js_assigned_member",
+        "source": "invoke",
+        "target": "render",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "js_known_receiver",
+        "source": "A::run",
+        "target": "B::other",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "py_known_receiver",
+        "source": "A::run",
+        "target": "B::other",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "rs_reexport_macro",
+        "source": "main",
+        "target": "Worker::create",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_reexport_macro",
+        "source": "main",
+        "target": "Worker::run",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_library_root",
+        "source": "main",
+        "target": "helper",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_return_chain",
+        "source": "entry",
+        "target": "Runner::run",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_custom_library",
+        "source": "main",
+        "target": "Runner::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "js_cjs_reexports",
+        "source": "entry",
+        "target": "make",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "js_cjs_reexports",
+        "source": "entry",
+        "target": "handler",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "js_cjs_object",
+        "source": "entry",
+        "target": "internal",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "js_namespace_not_callable",
+        "source": "entry",
+        "target": "make",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "js_routes_comments",
+        "routes": [
+          "GET /real"
+        ],
+        "pass": true
+      },
+      {
+        "case": "rs_std_result",
+        "source": "good",
+        "target": "Runner::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_std_result",
+        "source": "bad",
+        "target": "Runner::execute",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "rs_custom_result",
+        "source": "entry",
+        "target": "Other::other",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_custom_result",
+        "source": "entry",
+        "target": "Runner::execute",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "js_member_alias",
+        "source": "right",
+        "target": "internal",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "js_member_alias",
+        "source": "wrong",
+        "target": "internal",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "js_private_export",
+        "source": "viaMember",
+        "target": "hidden",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "js_private_export",
+        "source": "viaName",
+        "target": "hidden",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "js_private_export",
+        "source": "good",
+        "target": "publicFn",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_qualified_return",
+        "source": "entry",
+        "target": "Worker::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_try_result",
+        "source": "entry",
+        "target": "Runner::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_nested_macro",
+        "source": "main",
+        "target": "Worker::create",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_nested_macro",
+        "source": "main",
+        "target": "Worker::run",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "py_django_manager",
+        "source": "entry",
+        "target": "Model::save",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "js_foreign_annotation",
+        "source": "entry",
+        "target": "Local::execute",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "rs_module_value_namespaces",
+        "source": "entry",
+        "target": "once",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_opaque_macro",
+        "source": "main",
+        "target": "Worker::create",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "rs_opaque_macro",
+        "source": "main",
+        "target": "Worker::run",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "js_static_subscript",
+        "source": "entry",
+        "target": "internal",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "js_dynamic_subscript",
+        "source": "entry",
+        "target": "internal",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "js_cjs_default_property",
+        "source": "bad",
+        "target": "make",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "js_cjs_default_property",
+        "source": "good",
+        "target": "make",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "js_cjs_default_import",
+        "source": "entry",
+        "target": "make",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "js_cjs_object_import",
+        "source": "bad",
+        "target": "make",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "js_cjs_object_import",
+        "source": "good",
+        "target": "make",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_external_initializer",
+        "source": "wrong",
+        "target": "Local::execute",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "go_external_initializer",
+        "source": "wrong",
+        "target": "Local::Type",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "rs_duplicate_type_members",
+        "source": "wrong",
+        "target": "Worker::stop",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "rs_duplicate_type_members",
+        "source": "right",
+        "target": "Worker::stop",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_lifetime_return",
+        "source": "entry",
+        "target": "Worker::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_lifetime_return",
+        "source": "entry",
+        "target": "Noise::execute",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "rs_result_direct_chain",
+        "source": "wrong",
+        "target": "Worker::execute",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "rs_result_direct_chain",
+        "source": "right",
+        "target": "Worker::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "py_factory_return",
+        "source": "entry",
+        "target": "Worker::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "py_factory_return",
+        "source": "entry",
+        "target": "Noise::execute",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "py_nested_factory_scope",
+        "source": "first",
+        "target": "Worker::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "py_nested_factory_scope",
+        "source": "second",
+        "target": "Noise::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "py_nested_factory_scope",
+        "source": "second",
+        "target": "Worker::execute",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "py_mixed_factory_return",
+        "source": "wrong",
+        "target": "Worker::execute",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "py_mixed_factory_return",
+        "source": "wrong",
+        "target": "Noise::execute",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "py_factory_field",
+        "source": "Owner::run",
+        "target": "Worker::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "py_factory_field",
+        "source": "Owner::run",
+        "target": "Noise::execute",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "py_return_annotation",
+        "source": "entry",
+        "target": "Worker::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_pointer_receivers",
+        "source": "annotation",
+        "target": "Worker::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_pointer_receivers",
+        "source": "boxed",
+        "target": "Worker::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_pointer_receivers",
+        "source": "allocated",
+        "target": "Worker::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_pointer_receivers",
+        "source": "copied",
+        "target": "Worker::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_pointer_receivers",
+        "source": "direct",
+        "target": "Worker::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_pointer_receivers",
+        "source": "wrong",
+        "target": "Worker::clone",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "rs_pointer_alias",
+        "source": "entry",
+        "target": "Worker::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_custom_pointer",
+        "source": "entry",
+        "target": "Noise::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_custom_pointer",
+        "source": "entry",
+        "target": "Worker::execute",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "rs_try_direct_chain",
+        "source": "entry",
+        "target": "Worker::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "js_nested_helpers",
+        "source": "first",
+        "target": "first::helper",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "js_nested_helpers",
+        "source": "second",
+        "target": "second::helper",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "js_nested_helpers",
+        "source": "second",
+        "target": "first::helper",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "rs_nested_helpers",
+        "source": "first",
+        "target": "first::helper",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_nested_helpers",
+        "source": "second",
+        "target": "second::helper",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_nested_helpers",
+        "source": "second",
+        "target": "first::helper",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "py_union_annotation",
+        "source": "wrong",
+        "target": "Worker::execute",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "py_union_annotation",
+        "source": "wrong",
+        "target": "Noise::execute",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "py_generator_factory",
+        "source": "wrong",
+        "target": "Worker::execute",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "rs_pointer_field_not_erased",
+        "source": "Owner::wrong",
+        "target": "Worker::clone",
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      {
+        "case": "rs_imported_impl_owner",
+        "source": "entry",
+        "target": "Worker::new",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      },
+      {
+        "case": "rs_imported_impl_owner",
+        "source": "entry",
+        "target": "Worker::execute",
+        "expected": true,
+        "actual": true,
+        "pass": true
+      }
+    ],
+    "workspacePassed": 137,
+    "workspaceIgnored": 1,
+    "randomEditSequences": 6,
+    "randomEditsPerSequence": 100,
+    "independentSql": [
+      {
+        "repo": "express",
+        "strictSharedSql": 2062,
+        "supportedCallEdgesSql": 1105,
+        "sharedCallEdgesSql": 1097,
+        "sourceDigest": "c39abc479d71163b943ac64b92be04fe71520805fc8e0ffe6948d61d11e61603",
+        "sourceBytesRestored": true,
+        "timedOutFiles": 0,
+        "nonRouteNodeIdentity": {
+          "cgr": 866,
+          "oracle": 866,
+          "intersection": 866,
+          "cgrOnly": 0,
+          "oracleOnly": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "jaccard": 1.0
+        }
+      },
+      {
+        "repo": "gin",
+        "strictSharedSql": 7678,
+        "supportedCallEdgesSql": 3487,
+        "sharedCallEdgesSql": 3482,
+        "sourceDigest": "62fea02b516804db33f5a7ed817a55b306d40d485847dcaeef87987ad8566b09",
+        "sourceBytesRestored": true,
+        "timedOutFiles": 0,
+        "nonRouteNodeIdentity": {
+          "cgr": 2436,
+          "oracle": 2436,
+          "intersection": 2436,
+          "cgrOnly": 0,
+          "oracleOnly": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "jaccard": 1.0
+        }
+      },
+      {
+        "repo": "tokio",
+        "strictSharedSql": 34176,
+        "supportedCallEdgesSql": 11083,
+        "sharedCallEdgesSql": 10596,
+        "sourceDigest": "714f5d8b2c0dc196ff30e98fbeba0bc5efc48caf695cfeb3f4d1360296f2f30b",
+        "sourceBytesRestored": true,
+        "timedOutFiles": 0,
+        "nonRouteNodeIdentity": {
+          "cgr": 14460,
+          "oracle": 14460,
+          "intersection": 14460,
+          "cgrOnly": 0,
+          "oracleOnly": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "jaccard": 1.0
+        }
+      },
+      {
+        "repo": "django",
+        "strictSharedSql": 174356,
+        "supportedCallEdgesSql": 44998,
+        "sharedCallEdgesSql": 44006,
+        "sourceDigest": "3d77c24c790cfce7a0ebd2b6b8adc0ac91fb6f7df15daf98bba248334ad915ff",
+        "sourceBytesRestored": true,
+        "timedOutFiles": 0,
+        "nonRouteNodeIdentity": {
+          "cgr": 61915,
+          "oracle": 61915,
+          "intersection": 61915,
+          "cgrOnly": 0,
+          "oracleOnly": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "jaccard": 1.0
+        }
+      }
+    ],
+    "realRepositoryChecks": 24,
+    "changedReturnConsumerChecks": 12,
+    "changedReturnReResolvedFiles": 2,
+    "changedReturnProjectFiles": 63,
+    "engine3UpgradeMatchesFull": true,
+    "repeatedTokioWorkerCounts": [
+      1,
+      2,
+      4
+    ],
+    "supplementaryDeadlineChecks": 2,
+    "clippy": "Rust 1.99, all targets except vendored kernel, -D warnings, passed",
+    "format": "CI package list passed",
+    "cliMcpSmoke": "passed",
+    "newPerformanceClaim": false,
+    "proofScriptsAndFixturesCommitted": false
+  },
+  "strictDesignGate": {
+    "minimumPrecision": 0.97,
+    "minimumRecall": 0.95,
+    "passed": false,
+    "failingRepositories": [
+      "express",
+      "gin",
+      "tokio",
+      "django"
+    ]
+  }
+}
