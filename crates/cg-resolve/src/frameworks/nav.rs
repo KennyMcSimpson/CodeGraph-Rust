@@ -15,7 +15,7 @@ use super::href::{self, app_root_for, match_bracket, object_field, parse_href_ex
 use super::jsroutes::next_route_of;
 use crate::engine::Engine;
 use crate::synth::scan::{call_args, enclosing_row, is_minified, local_initializer, mid_chain, LineIndex, FN_KINDS};
-use crate::synth::sites::{PASS_NAV, PASS_PROXY};
+use crate::synth::sites::{PASS_NAV, PASS_PROXY, PASS_REACT_TABLE};
 use crate::synth::Out;
 use cg_core::{EdgeKind, FileId, Lang, LangFamily, NodeIdx, NodeKind, NONE};
 use cg_extract::{FileHook, HookCtx, HookOut, SiteFact};
@@ -162,6 +162,45 @@ struct Tables {
     tanstack: RootedTables,
 }
 
+/// An anonymous `export default [...]` has no kernel symbol. Follow export aliases to its
+/// persisted table sites instead of guessing a same-named declaration in another file.
+fn exported_react_table(e: &Engine<'_>, f: FileId, name: &str, depth: u8) -> Option<(FileId, String)> {
+    use crate::engine::{Bound, ExportEntry};
+    if depth > 8 {
+        return None;
+    }
+    let view = e.view;
+    if let Some(Bound::Node(n)) = e.lookup_export(f, name, 0) {
+        let node = view.node(n);
+        return Some((node.file(), node.name().to_owned()));
+    }
+    if let Some(ExportEntry::Re(target, from)) = e.exports.get(f.idx())?.get(name) {
+        return exported_react_table(e, *target, view.text_str(*from), depth + 1);
+    }
+    if name == "default"
+        && view.sites_of(f).iter().any(|s| {
+            s.pass == PASS_REACT_TABLE
+                && ((s.role == 0 && view.text_str(cg_core::StrId(s.key_a)) == "#default")
+                    || (s.role == 1 && view.text_str(cg_core::StrId(s.key_b)) == "#default"))
+        })
+    {
+        return Some((f, "#default".to_owned()));
+    }
+    None
+}
+
+fn react_table_binding(e: &Engine<'_>, f: FileId, name: &str) -> Option<(FileId, String)> {
+    if let Some(n) = super::js_symbol(e, f, name) {
+        let node = e.view.node(n);
+        return Some((node.file(), node.name().to_owned()));
+    }
+    let (head, member) = name.split_once('.').map_or((name, None), |(a, b)| (a, Some(b)));
+    let (index, import) = e.view.imports_of(f).iter().enumerate().find(|(_, imp)| e.view.text_str(imp.local) == head)?;
+    let target = e.modules.target_file(*e.imp_targets.get(f.idx())?.get(index)?)?;
+    let imported = member.unwrap_or_else(|| e.view.text_str(import.imported));
+    exported_react_table(e, target, imported, 0)
+}
+
 fn route_tables(e: &Engine<'_>) -> Tables {
     let view = e.view;
     let mut t = Tables { next: RouteTable::default(), next_roots: Vec::new(), react: RootedTables::default(), tanstack: RootedTables::default() };
@@ -200,6 +239,48 @@ fn route_tables(e: &Engine<'_>) -> Tables {
                 }
                 Some("tanstack-router") => t.tanstack.add(app_root_for(path), node.name(), n),
                 _ => {}
+            }
+        }
+    }
+    // Resolve the table argument through imports and re-exports. Candidate arrays that are
+    // never passed to a router do not become navigation targets.
+    let mut queue = Vec::new();
+    for f in view.files() {
+        for site in view.sites_of(f).iter().filter(|s| s.pass == PASS_REACT_TABLE && s.role == 1 && view.text_str(cg_core::StrId(s.key_b)).is_empty()) {
+            let name = view.text_str(cg_core::StrId(site.key_a));
+            let payload = view.text_str(site.payload);
+            queue.push((f, name.to_owned(), app_root_for(view.file(f).path()).to_owned(), payload.get(1..).unwrap_or("").to_owned(), 0u8));
+        }
+    }
+    let mut activated = FxHashSet::default();
+    while let Some((f, name, root, prefix, depth)) = queue.pop() {
+        if depth > 16 {
+            continue;
+        }
+        let Some((decl_file, decl_name)) = react_table_binding(e, f, &name) else { continue };
+        if !activated.insert((decl_file, decl_name.clone(), root.clone(), prefix.clone())) {
+            continue;
+        }
+        for site in view.sites_of(decl_file).iter().filter(|s| s.pass == PASS_REACT_TABLE) {
+            let name = view.text_str(cg_core::StrId(site.key_a));
+            let payload = view.text_str(site.payload);
+            if site.role == 1 && view.text_str(cg_core::StrId(site.key_b)) == decl_name {
+                let sub = payload.get(1..).unwrap_or("");
+                let path = if payload.starts_with('a') { sub.to_owned() } else { href::compose_route_path(&[&prefix, sub.trim_start_matches('/')]) };
+                queue.push((decl_file, name.to_owned(), root.clone(), path, depth + 1));
+            } else if site.role == 0 && name == decl_name {
+                let node = view.node(site.node);
+                if node.kind() != NodeKind::Route || node.name().ends_with('*') {
+                    continue;
+                }
+                let path = if payload == "a" { node.name().to_owned() } else { href::compose_route_path(&[&prefix, node.name().trim_start_matches('/')]) };
+                let p = if path.len() > 1 { path.trim_end_matches('/') } else { &path };
+                t.react.add(&root, p, site.node);
+                let mut segs: Vec<&str> = p.split('/').skip(1).collect();
+                while segs.len() > 1 && segs.last().is_some_and(|s| s.starts_with(':') && s.ends_with('?')) {
+                    segs.pop();
+                    optional.push((root.clone(), format!("/{}", segs.join("/")), site.node));
+                }
             }
         }
     }

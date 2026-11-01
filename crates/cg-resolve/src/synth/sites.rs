@@ -30,6 +30,10 @@ pub const PASS_BUS: u16 = 11;
 pub const PASS_CELERY: u16 = 12;
 /// Spring application events (`dynamic::spring_events`).
 pub const PASS_SPRING: u16 = 13;
+/// React Router arrays and the router calls that consume them.
+pub const PASS_REACT_TABLE: u16 = 14;
+/// Nest modules, router registrations and application bootstrap configuration.
+pub const PASS_NEST: u16 = 15;
 
 pub const ROLE_EMIT: u8 = 0;
 pub const ROLE_ON: u8 = 1;

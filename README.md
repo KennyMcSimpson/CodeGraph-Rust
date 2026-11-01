@@ -232,7 +232,8 @@ and project configuration; this is a static code graph rather than a full compil
 
 ### Framework and dynamic-dispatch rules
 
-Route hooks are implemented for **Express, Flask, FastAPI, Django, Gin, Spring, Axum and Next.js**.
+Route hooks are implemented for **Express, Flask, FastAPI, Django, Gin, Spring, Axum, Next.js,
+NestJS, React Router and TanStack Router**.
 Framework detection uses project manifests, so route coverage can differ when dependencies are
 absent or when indexing a framework's own repository. The benchmark documents observed gaps.
 
@@ -240,6 +241,15 @@ Supported synthesis passes include interface/implementation dispatch, Go structu
 event-emitter handlers, React re-render links and JSX parent/child links. These are bounded
 heuristics with recorded provenance; they cover specific patterns rather than arbitrary
 runtime behavior.
+
+For NestJS, literal `RouterModule.register` paths and a literal `setGlobalPrefix` on a
+recognizable `NestFactory.create` application are composed for HTTP-client matching, including
+statically readable exclusions. Route node names remain controller-local. For React Router,
+exported route-object arrays can be consumed across imports and re-exports, including literal
+parent routes and `children` arrays. Candidate route nodes are retained for exported arrays;
+only arrays reached from a recognized router call participate in navigation matching. Dynamic
+route configuration remains outside this cross-file rule. Go interface dispatch includes unambiguous promoted methods;
+method-set inference remains a bounded static approximation.
 
 C/C++, C#, PHP, Ruby, Swift and the other upstream language families are outside this version's
 supported extraction set. Vue/Svelte-specific extraction is also outside the current scope.
