@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # nightly: long random-edit sequences for "incremental == full rebuild" (design doc 9.6)
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # "incremental == full rebuild" sequences: 6 x 100 steps per PR, 40 x 250 nightly
+  CGR_SYNC_SEQUENCES: ${{ github.event_name == 'schedule' && '40' || '6' }}
+  CGR_SYNC_STEPS: ${{ github.event_name == 'schedule' && '250' || '100' }}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: rustfmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      # The vendored kernel keeps its upstream formatting, so it is not part of this check.
+      - name: rustfmt
+        run: >
+          cargo fmt -p cg-core -p cg-scan -p cg-extract -p cg-store -p cg-resolve
+          -p cg-query -p cg-sync -p cg-mcp -p cg-install -p cgr -- --check
+      - name: clippy
+        run: cargo clippy --workspace --exclude cg-kernel --all-targets -- -D warnings
+
+  kernel:
+    name: vendored kernel is upstream + our patches
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: re-vendor and compare
+        run: |
+          set -euo pipefail
+          sha="$(tr -d '\n' < crates/cg-kernel/UPSTREAM_COMMIT)"
+          git clone --quiet https://github.com/colbymchenry/codegraph "$RUNNER_TEMP/upstream"
+          scripts/sync-kernel.sh "$RUNNER_TEMP/upstream" "$sha"
+          git diff --exit-code -- crates/cg-kernel
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: unit and integration tests
+        run: cargo test --workspace
+
+  smoke:
+    name: end-to-end smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: build
+        run: cargo build --profile fastrel -p cgr
+      - name: init, explore, sync, MCP handshake on a small fixture
+        shell: bash
+        run: scripts/smoke.sh target/fastrel/cgr
+
+  musl:
+    name: static Linux build (musl, zig)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+      - run: cargo install cargo-zigbuild --locked
+      - name: build
+        run: cargo zigbuild --profile fastrel -p cgr --target x86_64-unknown-linux-musl
+      - name: the binary has no dynamic dependencies and still works
+        run: |
+          bin=target/x86_64-unknown-linux-musl/fastrel/cgr
+          ! ldd "$bin" 2>&1 | grep -q 'not a dynamic executable' && { echo "expected a static executable"; ldd "$bin"; exit 1; } || true
+          scripts/smoke.sh "$bin"

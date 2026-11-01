@@ -1,0 +1,161 @@
+//! MCP server behaviour that agents rely on, driven through the transport-independent core.
+
+use cg_mcp::{Config, Reply, Server};
+use serde_json::{json, Value};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+#[derive(Default)]
+struct Collect(Mutex<Vec<Value>>);
+
+impl Reply for Collect {
+    fn send(&self, msg: Value) {
+        self.0.lock().unwrap().push(msg);
+    }
+}
+
+impl Collect {
+    fn by_id(&self, id: i64) -> Option<Value> {
+        self.0.lock().unwrap().iter().find(|m| m["id"] == json!(id)).cloned()
+    }
+}
+
+fn project() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let w = |rel: &str, text: &str| {
+        let p = dir.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    w("src/greet.ts", "export function greet(name: string): string {\n  return format(name);\n}\nexport function format(name: string): string {\n  return `hello ${name}`;\n}\n");
+    w("src/main.ts", "import { greet } from './greet';\nexport function main(): string {\n  return greet('world');\n}\n");
+    cg_resolve::index_project(dir.path(), &Default::default()).unwrap();
+    dir
+}
+
+fn server_for(root: &Path, tools: Option<Vec<String>>) -> (Arc<Server>, Arc<Collect>) {
+    let server = Server::new(Config { path: Some(root.to_path_buf()), tools, dedup: false });
+    let out = Arc::new(Collect::default());
+    server.set_outbound(out.clone());
+    (server, out)
+}
+
+fn rpc(server: &Arc<Server>, out: &Arc<Collect>, id: i64, method: &str, params: Value) {
+    server.handle(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}), out.clone());
+}
+
+fn call(server: &Arc<Server>, out: &Arc<Collect>, id: i64, tool: &str, args: Value) {
+    rpc(server, out, id, "tools/call", json!({"name": tool, "arguments": args}));
+}
+
+fn text_of(reply: &Value) -> String {
+    reply["result"]["content"][0]["text"].as_str().unwrap_or_default().to_owned()
+}
+
+#[test]
+fn initialize_announces_the_server_and_its_instructions() {
+    let dir = project();
+    let (server, out) = server_for(dir.path(), None);
+    rpc(&server, &out, 1, "initialize", json!({"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}));
+    let r = out.by_id(1).expect("initialize answered synchronously");
+    assert_eq!(r["result"]["serverInfo"]["name"], "codegraph-rust");
+    assert_eq!(r["result"]["protocolVersion"], "2025-03-26");
+    let instructions = r["result"]["instructions"].as_str().unwrap();
+    assert!(instructions.contains("codegraph-rust_explore"));
+    // an unknown protocol version is answered with one we support
+    let (server2, out2) = server_for(dir.path(), None);
+    rpc(&server2, &out2, 1, "initialize", json!({"protocolVersion": "1999-01-01", "capabilities": {}}));
+    assert_eq!(out2.by_id(1).unwrap()["result"]["protocolVersion"], "2025-06-18");
+}
+
+#[test]
+fn default_surface_is_explore_only_and_the_allowlist_opens_more() {
+    let dir = project();
+    let (server, out) = server_for(dir.path(), None);
+    rpc(&server, &out, 2, "tools/list", json!({}));
+    let tools = out.by_id(2).unwrap()["result"]["tools"].clone();
+    let names: Vec<&str> = tools.as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["codegraph-rust_explore"]);
+    assert_eq!(tools[0]["annotations"]["readOnlyHint"], true);
+    assert_eq!(tools[0]["_meta"]["anthropic/alwaysLoad"], true);
+
+    let (server, out) = server_for(dir.path(), Some(vec!["explore".into(), "callers".into(), "node".into()]));
+    rpc(&server, &out, 2, "tools/list", json!({}));
+    let tools = out.by_id(2).unwrap()["result"]["tools"].clone();
+    let mut names: Vec<&str> = tools.as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    names.sort();
+    assert_eq!(names, ["codegraph-rust_callers", "codegraph-rust_explore", "codegraph-rust_node"]);
+}
+
+#[test]
+fn explore_returns_source_and_is_not_an_error() {
+    let dir = project();
+    let (server, out) = server_for(dir.path(), None);
+    call(&server, &out, 3, "codegraph-rust_explore", json!({"query": "greet format"}));
+    server.drain(Duration::from_secs(20));
+    let r = out.by_id(3).expect("explore answered");
+    assert!(r["result"]["isError"].is_null(), "{r}");
+    let text = text_of(&r);
+    assert!(text.contains("greet") && text.contains("format"), "{text}");
+    assert!(text.contains("src/greet.ts"), "{text}");
+}
+
+/// Regression: when the client closes stdin right after its last request, that request still
+/// gets its answer (the stdio loop drains in-flight calls before it exits).
+#[test]
+fn drain_waits_for_accepted_calls() {
+    let dir = project();
+    let (server, out) = server_for(dir.path(), None);
+    for id in 10..16 {
+        call(&server, &out, id, "codegraph-rust_explore", json!({"query": "main greet"}));
+    }
+    server.drain(Duration::from_secs(20));
+    for id in 10..16 {
+        assert!(out.by_id(id).is_some(), "call {id} was dropped");
+    }
+}
+
+#[test]
+fn problems_are_success_shaped_so_agents_can_read_them() {
+    let dir = project();
+    let (server, out) = server_for(dir.path(), None);
+    call(&server, &out, 4, "codegraph-rust_nonexistent", json!({}));
+    call(&server, &out, 5, "codegraph-rust_explore", json!({}));
+    server.drain(Duration::from_secs(20));
+    for id in [4, 5] {
+        let r = out.by_id(id).unwrap();
+        assert!(r.get("error").is_none(), "tool problems must not be JSON-RPC errors: {r}");
+        assert!(!text_of(&r).is_empty());
+    }
+    // a project without an index says so in plain text instead of failing
+    let empty = tempfile::tempdir().unwrap();
+    let (server, out) = server_for(empty.path(), None);
+    call(&server, &out, 6, "codegraph-rust_explore", json!({"query": "anything"}));
+    server.drain(Duration::from_secs(20));
+    let r = out.by_id(6).unwrap();
+    assert!(r.get("error").is_none());
+    assert!(text_of(&r).contains("cgr init"), "{}", text_of(&r));
+}
+
+#[test]
+fn unknown_methods_get_a_json_rpc_error() {
+    let dir = project();
+    let (server, out) = server_for(dir.path(), None);
+    rpc(&server, &out, 7, "no/such/method", json!({}));
+    assert_eq!(out.by_id(7).unwrap()["error"]["code"], -32601);
+}
+
+#[test]
+fn project_path_selects_another_index() {
+    let first = project();
+    let second = tempfile::tempdir().unwrap();
+    std::fs::write(second.path().join("other.py"), "def only_in_second():\n    return 1\n").unwrap();
+    cg_resolve::index_project(second.path(), &Default::default()).unwrap();
+    let (server, out) = server_for(first.path(), None);
+    call(&server, &out, 8, "codegraph-rust_explore", json!({"query": "only_in_second", "projectPath": second.path().to_str().unwrap()}));
+    call(&server, &out, 9, "codegraph-rust_explore", json!({"query": "only_in_second"}));
+    server.drain(Duration::from_secs(20));
+    assert!(text_of(&out.by_id(8).unwrap()).contains("only_in_second"));
+    assert!(!text_of(&out.by_id(9).unwrap()).contains("def only_in_second"), "the default project must not see the other index");
+}

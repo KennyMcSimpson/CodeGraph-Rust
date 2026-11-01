@@ -80,7 +80,27 @@ pub struct Server {
     rebuild_hook: Mutex<Option<RebuildHook>>,
     open_hook: Mutex<Option<OpenHook>>,
     next_req: AtomicU64,
+    /// Tool calls that were accepted and have not been answered yet (see [`Server::drain`]).
+    inflight: (Mutex<usize>, Condvar),
     pub started: Instant,
+}
+
+/// Counts one accepted tool call until its answer has been written.
+struct InFlight(Arc<Server>);
+
+impl InFlight {
+    fn enter(server: &Arc<Server>) -> InFlight {
+        *server.inflight.0.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        InFlight(Arc::clone(server))
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        let mut n = self.0.inflight.0.lock().unwrap_or_else(|e| e.into_inner());
+        *n = n.saturating_sub(1);
+        self.0.inflight.1.notify_all();
+    }
 }
 
 fn tool_result(o: ToolOutput) -> Value {
@@ -137,6 +157,7 @@ impl Server {
             client_roots: AtomicBool::new(false),
             protocol: Mutex::new(SUPPORTED_PROTOCOLS[0].to_owned()),
             pool_tx: Mutex::new(Some(tx)),
+            inflight: (Mutex::new(0), Condvar::new()),
             outbound: OnceLock::new(),
             shutdown_flag: AtomicBool::new(false),
             shutdown_hooks: Mutex::new(Vec::new()),
@@ -172,6 +193,20 @@ impl Server {
 
     pub fn on_shutdown(&self, f: Box<dyn FnOnce() + Send>) {
         self.shutdown_hooks.lock().unwrap_or_else(|e| e.into_inner()).push(f);
+    }
+
+    /// Wait until every accepted tool call has been answered, or `max` has passed. Used when the
+    /// client closes stdin: its last requests still get their answers.
+    pub fn drain(&self, max: Duration) {
+        let deadline = Instant::now() + max;
+        let mut n = self.inflight.0.lock().unwrap_or_else(|e| e.into_inner());
+        while *n > 0 {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            n = self.inflight.1.wait_timeout(n, left).unwrap_or_else(|e| e.into_inner()).0;
+        }
     }
 
     pub fn is_shutdown(&self) -> bool {
@@ -429,7 +464,9 @@ impl Server {
             return;
         }
         // The watchdog answers with a success-shaped note if the call overruns its budget.
+        let in_flight = InFlight::enter(self);
         std::thread::spawn(move || {
+            let _in_flight = in_flight;
             let result = match rx.recv_timeout(CALL_TIMEOUT) {
                 Ok(v) => v,
                 Err(_) => tool_result(ToolOutput::ok(

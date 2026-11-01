@@ -68,8 +68,9 @@ pub fn serve_stdio(server: Arc<Server>) -> std::io::Result<()> {
             Err(e) => reply.send(serde_json::json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("Parse error: {e}")}})),
         }
     }
-    // stdin closed: let in-flight answers drain briefly, then stop the watcher and release locks
-    std::thread::sleep(Duration::from_millis(50));
+    // stdin closed: answer what was already accepted (a call is capped at 30 s), then stop the
+    // watcher and release locks
+    server.drain(Duration::from_secs(35));
     server.shutdown();
     Ok(())
 }

@@ -452,10 +452,18 @@ fn single_edit_matches_full_rebuild() {
     run_sequence(1, 1);
 }
 
+fn env_usize(name: &str, default: usize) -> usize {
+    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+
+/// Random edit sequences (design doc 9.6). Local default: 6 sequences of 25 steps; the PR job
+/// runs 6 x 100 and the nightly job 40 x 250 through `CGR_SYNC_SEQUENCES` / `CGR_SYNC_STEPS`.
 #[test]
 fn random_edit_sequences_match_full_rebuild() {
-    for seed in 1..=6 {
-        run_sequence(seed, 25);
+    let sequences = env_usize("CGR_SYNC_SEQUENCES", 6) as u64;
+    let steps = env_usize("CGR_SYNC_STEPS", 25);
+    for seed in 1..=sequences {
+        run_sequence(seed, steps);
     }
 }
 
