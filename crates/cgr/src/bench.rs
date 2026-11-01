@@ -585,3 +585,137 @@ mod tempfile_guard {
         }
     }
 }
+
+// ---------------------------------------------------------------- bench compare
+
+#[derive(Clone, Copy, PartialEq)]
+enum Unit {
+    Ms,
+    Mb,
+}
+
+/// `YYYY-MM-DD_HHMMSS` in UTC, so summaries sort by time and never overwrite each other.
+fn unix_stamp() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as i64;
+    // civil date from days since 1970-01-01
+    let z = secs.div_euclid(86400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let rem = secs.rem_euclid(86400);
+    format!("{:04}-{:02}-{:02}_{:02}{:02}{:02}", if m <= 2 { y + 1 } else { y }, m, d, rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
+/// Collect the headline numbers of every `<repo>.<kind>.json` in `dir` (and the process-tree
+/// peaks that `scripts/bench-local.sh` measured, `<repo>.<kind>.guard.json`).
+fn collect_metrics(dir: &Path) -> Result<std::collections::BTreeMap<String, (f64, Unit)>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut names: Vec<PathBuf> =
+        std::fs::read_dir(dir).with_context(|| format!("cannot read {}", dir.display()))?.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    names.sort();
+    for p in names {
+        let Some(file) = p.file_name().and_then(|n| n.to_str()) else { continue };
+        let Some(stem) = file.strip_suffix(".json") else { continue };
+        let v: Value = match std::fs::read_to_string(&p).ok().and_then(|t| serde_json::from_str(&t).ok()) {
+            Some(v) => v,
+            None => continue,
+        };
+        if let Some(name) = stem.strip_suffix(".guard") {
+            if let Some(mb) = v["peakRssMb"].as_f64() {
+                out.insert(format!("{name}.process-tree-peak-rss-mb"), (mb, Unit::Mb));
+            }
+            continue;
+        }
+        let Some((repo, kind)) = stem.rsplit_once('.') else { continue };
+        let mut put = |k: &str, x: &Value, unit: Unit| {
+            if let Some(f) = x.as_f64() {
+                out.insert(format!("{repo}.{kind}.{k}"), (f, unit));
+            }
+        };
+        match kind {
+            "index" => {
+                put("total-ms-p50", &v["totalMs"]["p50"], Unit::Ms);
+                put("peak-rss-mb-p50", &v["peakRssMb"]["p50"], Unit::Mb);
+            }
+            "sync" => {
+                put("latency-ms-p50", &v["latencyMs"]["p50"], Unit::Ms);
+                put("latency-ms-p95", &v["latencyMs"]["p95"], Unit::Ms);
+            }
+            "explore" => {
+                put("latency-ms-p50", &v["latencyMs"]["p50"], Unit::Ms);
+                put("latency-ms-p95", &v["latencyMs"]["p95"], Unit::Ms);
+                put("latency-ms-p99", &v["latencyMs"]["p99"], Unit::Ms);
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// Summarise a results directory, compare it with the newest earlier summary of the same tier in
+/// `history` and fail when any timing is more than `threshold` percent slower (design doc 13.4).
+pub fn compare(results: PathBuf, history: PathBuf, tier: String, threshold: f64, save: bool, force_save: bool) -> Result<i32> {
+    let cur = collect_metrics(&results)?;
+    if cur.is_empty() {
+        bail!("no benchmark results found in {}", results.display());
+    }
+    std::fs::create_dir_all(&history)?;
+    let suffix = format!("-{tier}.json");
+    let mut earlier: Vec<PathBuf> = std::fs::read_dir(&history)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(&suffix)))
+        .collect();
+    earlier.sort();
+    let base_file = earlier.last().cloned();
+    let base: std::collections::BTreeMap<String, f64> = match &base_file {
+        Some(f) => {
+            let v: Value = serde_json::from_str(&std::fs::read_to_string(f)?)?;
+            v["metrics"].as_object().map(|m| m.iter().filter_map(|(k, x)| x.as_f64().map(|f| (k.clone(), f))).collect()).unwrap_or_default()
+        }
+        None => Default::default(),
+    };
+    let mut regressions = 0;
+    match &base_file {
+        Some(f) => println!("comparing with {} (threshold {threshold}%)", f.display()),
+        None => println!("no earlier summary for tier `{tier}`: nothing to compare with"),
+    }
+    for (k, (x, unit)) in &cur {
+        let Some(b) = base.get(k) else {
+            println!("  new      {k:<48} {x:>10.1}");
+            continue;
+        };
+        let ratio = if *b > 0.0 { x / b } else { 1.0 };
+        // timings under a couple of milliseconds are noise
+        let slower = *unit == Unit::Ms && ratio > 1.0 + threshold / 100.0 && x - b > 2.0;
+        let bigger = *unit == Unit::Mb && ratio > 1.0 + threshold / 100.0 && x - b > 8.0;
+        let tag = if slower {
+            regressions += 1;
+            "SLOWER"
+        } else if bigger {
+            "bigger"
+        } else {
+            "ok"
+        };
+        println!("  {tag:<8} {k:<48} {b:>10.1} -> {x:>10.1}  ({:+.1}%)", (ratio - 1.0) * 100.0);
+    }
+    // A regressing run does not silently become the new baseline; `--force-save` re-baselines on purpose.
+    if save && (regressions == 0 || base_file.is_none() || force_save) {
+        let stamp = unix_stamp();
+        let path = history.join(format!("{stamp}{suffix}"));
+        let metrics: serde_json::Map<String, Value> = cur.iter().map(|(k, (x, _))| (k.clone(), json!(x))).collect();
+        std::fs::write(&path, serde_json::to_string_pretty(&json!({"schema": 1, "tier": tier, "date": stamp, "metrics": metrics}))? + "\n")?;
+        println!("saved {}", path.display());
+    } else if save {
+        println!("not saved as the new baseline because of the regressions above (use --force-save to re-baseline)");
+    }
+    if regressions > 0 {
+        println!("{regressions} metric(s) are more than {threshold}% slower than the baseline");
+        return Ok(1);
+    }
+    Ok(0)
+}

@@ -1,0 +1,115 @@
+name: Release
+
+# Tag `v*` to publish a GitHub release. "Run workflow" builds all six targets and uploads the
+# archives as workflow artifacts without publishing anything (a dry run of the release).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, zig: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, zig: true }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-latest }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - uses: mlugg/setup-zig@v1
+        if: matrix.zig
+        with:
+          version: 0.13.0
+      - name: install cargo-zigbuild
+        if: matrix.zig
+        run: cargo install cargo-zigbuild --locked
+
+      - name: build (static musl through zig cc)
+        if: matrix.zig
+        run: cargo zigbuild --release -p cgr --target ${{ matrix.target }}
+      - name: build
+        if: ${{ !matrix.zig }}
+        run: cargo build --release -p cgr --target ${{ matrix.target }}
+
+      - name: package
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="cgr"))')"
+          name="cgr-${version}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          exe=cgr; case "${{ matrix.target }}" in *windows*) exe=cgr.exe;; esac
+          cp "target/${{ matrix.target }}/release/$exe" "dist/$name/"
+          cp LICENSE THIRD_PARTY_NOTICES README.md CHANGELOG.md "dist/$name/"
+          cd dist
+          case "${{ matrix.target }}" in
+            *windows*) 7z a -tzip "$name.zip" "$name" >/dev/null; archive="$name.zip";;
+            *) tar -czf "$name.tar.gz" "$name"; archive="$name.tar.gz";;
+          esac
+          if command -v sha256sum >/dev/null; then sha256sum "$archive" > "$archive.sha256"; else shasum -a 256 "$archive" > "$archive.sha256"; fi
+          echo "archive=dist/$archive" >> "$GITHUB_OUTPUT"
+          echo "bin=target/${{ matrix.target }}/release/$exe" >> "$GITHUB_OUTPUT"
+          ls -l "$archive"
+
+      - name: binary size is within the budget (MVP <= 35 MB)
+        shell: bash
+        run: |
+          size=$(wc -c < "${{ steps.pack.outputs.bin }}")
+          echo "binary: $size bytes"
+          test "$size" -le 36700160
+
+      - name: static Linux executable
+        if: matrix.zig
+        shell: bash
+        run: |
+          out="$(file "${{ steps.pack.outputs.bin }}")"; echo "$out"
+          case "$out" in *"statically linked"*|*"static-pie linked"*) ;; *) echo "not static"; exit 1;; esac
+
+      - name: smoke test (native targets)
+        if: matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-apple-darwin' || matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: scripts/smoke.sh "${{ steps.pack.outputs.bin }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cgr-${{ matrix.target }}
+          path: |
+            ${{ steps.pack.outputs.archive }}
+            ${{ steps.pack.outputs.archive }}.sha256
+
+  publish:
+    name: publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: checksums
+        run: cd dist && cat *.sha256 > SHA256SUMS && ls -l
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

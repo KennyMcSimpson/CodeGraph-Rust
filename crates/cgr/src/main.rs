@@ -278,6 +278,27 @@ enum BenchCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Summarise a directory of `bench ... --json` results and compare it with the last baseline
+    Compare {
+        /// Directory with `<repo>.<index|sync|explore>.json` files
+        #[arg(long)]
+        results: PathBuf,
+        /// Directory of saved summaries (bench/history)
+        #[arg(long, default_value = "bench/history")]
+        history: PathBuf,
+        /// Benchmark tier the numbers belong to (standard, restricted)
+        #[arg(long, default_value = "standard")]
+        tier: String,
+        /// Fail when a timing is more than this many percent slower than the baseline
+        #[arg(long, default_value_t = 10.0)]
+        threshold: f64,
+        /// Do not write the new summary into the history directory
+        #[arg(long)]
+        no_save: bool,
+        /// Save the summary as the new baseline even when it regressed
+        #[arg(long)]
+        force_save: bool,
+    },
     /// explore latency distribution
     Explore {
         path: Option<PathBuf>,
@@ -374,6 +395,9 @@ fn run(cli: Cli) -> Result<i32> {
         }
         Cmd::Bench(BenchCmd::Sync { path, edits, seed, in_place, verify, verbose, json }) => {
             bench::sync(path.or(base), edits, seed, in_place, verify, verbose, json)
+        }
+        Cmd::Bench(BenchCmd::Compare { results, history, tier, threshold, no_save, force_save }) => {
+            bench::compare(results, history, tier, threshold, !no_save, force_save)
         }
         Cmd::Bench(BenchCmd::Explore { path, queries, count, runs, seed, json }) => bench::explore(path.or(base), queries, count, runs, seed, json),
     }
