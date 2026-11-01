@@ -1,41 +1,451 @@
-# codegraph-rust（`cgr`）
+# CodeGraph Rust（`cgr`）
 
-给编码 agent 用的代码知识图谱，交付物是**一个静态二进制**：不需要 Node.js，没有常驻进程，也没有数据库服务。
-`cgr` 把仓库索引成不可变、可 mmap 的快照，agent 通过 MCP（或命令行）查询 `explore`、`callers`、`impact` 等。
+**面向 AI 编码 Agent 的本地代码知识图谱，使用 Rust 构建。**
 
-它是 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph) 引擎的 Rust 重写：复用上游的 tree-sitter 提取内核
-（已 vendoring，见 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES)），MCP 工具名、描述和服务说明保持同样的形态（工具名前缀为 `codegraph-rust_`），
-因此上游调出来的 agent 行为可以直接继承。
+[English](README.md) · [简体中文](README.zh-CN.md) · [架构设计](docs/ARCHITECTURE.md) · [性能实测](docs/BENCHMARKS.md) · [更新记录](CHANGELOG.md)
 
-[English](README.md) · [架构](docs/ARCHITECTURE.md) · [实测结果](docs/BENCHMARKS.md) · [对照设计文档的完成情况](docs/STATUS.md)
+CodeGraph Rust 将代码仓库索引为持久化的符号、引用和关系图谱，帮助开发者与编码 Agent 获取相关源码、
+追踪跨文件调用、检查依赖关系，并分析修改可能影响的范围。项目通过一个命令行可执行文件提供这些能力，
+也可以作为 MCP 服务接入编码工具。
+
+引擎在本地运行，通过源码语法和确定性分析建立图谱。索引与查询不需要托管服务、向量嵌入 API、模型密钥、
+Node.js 运行时或数据库服务。原生索引保存在项目的 `.cgr/` 目录，查询中的源码窗口从当前工作区读取。
+
+本项目是 [colbymchenry/codegraph](https://github.com/colbymchenry/codegraph) 引擎的独立 Rust 重写：
+复用上游 Tree-sitter 提取内核，沿用并适配面向 Agent 的工具定义与使用说明，MCP 工具名前缀为 `codegraph-rust_`。
+存储、引用解析、增量同步、查询与服务集成由本 Rust workspace 实现。
+目前与上游的功能覆盖仍有差异，具体见[当前限制](#当前限制)。
+
+## 目录
+
+- [核心能力](#核心能力)
+- [实测性能](#实测性能)
+- [安装](#安装)
+- [快速开始](#快速开始)
+- [语言与框架支持](#语言与框架支持)
+- [命令行参考](#命令行参考)
+- [Agent 与 MCP 集成](#agent-与-mcp-集成)
+- [配置](#配置)
+- [架构设计](#架构设计)
+- [索引生命周期](#索引生命周期)
+- [开发与验证](#开发与验证)
+- [当前限制](#当前限制)
+- [参与贡献](#参与贡献)
+- [致谢与许可证](#致谢与许可证)
+
+## 核心能力
+
+- **基于真实源码的探索**：`explore` 在有输出预算的单次响应中组合符号检索、调用路径、相关源码与修改影响。
+  查询可包含自然语言问题、符号名、限定名或文件名；提供具体符号有助于定位调用链。
+- **跨文件代码导航**：查询调用方、被调用方、实现关系、导入和依赖，并覆盖部分框架路由与动态分派模式。
+- **增量索引**：重新提取发生变化的文件，重新解析受影响的引用；大范围修改或配置变化可以触发全量重建。
+- **高效持久化存储**：使用不可变 mmap 段、密集整数 ID、字符串池、双向 CSR 边，以及预建的 FST、trigram、BM25 索引。
+- **CLI 与 MCP 双入口**：终端和 Agent 共享查询处理逻辑；内置 Claude Code、Cursor、Codex 配置安装器。
+- **Agent 会话中的自动更新**：MCP 服务可监听项目变化，经过防抖后同步并发布新快照；没有监听器时可手动运行 `cgr sync`。
+- **可检查的分析结果**：通过命令行检查索引状态与校验和、查看未解析引用、对比增量与全量图谱，或导出 SQLite 文件。
+
+## 实测性能
+
+2026-11-01 在本机与上游 CodeGraph 对比：四个仓库的全量索引加速比几何平均为 **6.40×**，
+建索引峰值内存（RSS）降低 **86.2%–91.1%**。两边索引相同的源码文件，并启用原版的原生 Rust 提取内核。
+
+| 仓库 | 文件数 | 原版全量索引 | `cgr` 全量索引 | 加速比 | 峰值 RSS：原版 → `cgr` |
+|---|---:|---:|---:|---:|---:|
+| Express | 142 | 560 ms | 106 ms | **5.30×** | 278 → 35 MiB |
+| Gin | 99 | 652 ms | 112 ms | **5.81×** | 284 → 39 MiB |
+| Tokio | 814 | 2,409 ms | 321 ms | **7.51×** | 899 → 80 MiB |
+| Django | 2,984 | 10,184 ms | 1,404 ms | **7.25×** | 1,999 → 260 MiB |
+
+`explore` 热查询 P50 加速 **3.72×–9.21×**；每次新建进程的 `explore` CLI 查询加速 **12.48×–17.42×**。
+单文件注释编辑后的同步加速 **7.54×–8.37×**，单文件符号改名后的同步加速 **2.99×–9.58×**。
+
+测试机器为 Apple M5（10 核、16 GiB 内存），macOS 26.5.2，固定外接电源，使用 release 构建，
+两边提取与引用解析的工作线程参数均设为 4。全量索引数据为预热后 3 次 CLI 计时的中位数，保留系统文件缓存；
+加速比 = 原版耗时 ÷ `cgr` 耗时。被测版本为 `cgr` **`fcc59af`**、原版 **`087de4c`**（Node 24.18.0）。
+
+两边的路由覆盖和查询输出量仍有差异：本次 Express/Gin 样本中 `cgr` 没有生成原版提取出的路由节点。
+这些差异会影响实际工作量，需要结合速度一起判断。完整版本、查询与增量数据及验证口径见
+[实测结果与覆盖差异](docs/BENCHMARKS.md)。
+
+### 同轮测试的查询延迟
+
+| 仓库 | `explore` 热查询 P50：原版 → `cgr` | 热查询加速比 | 新进程 CLI 加速比 |
+|---|---:|---:|---:|
+| Express | 3.79 → 1.02 ms | 3.72× | 12.48× |
+| Gin | 8.82 → 0.96 ms | 9.21× | 15.70× |
+| Tokio | 15.93 → 3.28 ms | 4.86× | 15.60× |
+| Django | 32.28 → 4.60 ms | 7.02× | 17.42× |
+
+热查询测量进程内的 explore 处理函数，不含 MCP 传输与排队；新进程 CLI 测量包含进程启动。
+热查询 P50 加速比的几何平均为 **5.85×**。这些数据衡量代码分析与检索，本次没有运行 LLM 任务完成或 Token 节省测试。
 
 ## 安装
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/NianJiuZst/codegrap-rust/main/scripts/install.sh | sh   # Linux / macOS
-irm https://raw.githubusercontent.com/NianJiuZst/codegrap-rust/main/scripts/install.ps1 | iex        # Windows
-cargo install --path crates/cgr --locked                                                              # 源码安装
-```
+### 从源码构建并安装
 
-## 使用
+目前可用的安装方式是源码安装。需要 **Rust 1.89 或更新版本**、Cargo、Git，以及用于编译 Tree-sitter 语法的 C 编译工具链。
 
 ```sh
-cd 你的项目
-cgr init                       # 在 ./.cgr 建索引（目录自带 .gitignore，不会进 git）
-cgr explore "登录是怎么走到数据库的"
-cgr install                    # 把 MCP 服务注册到 Claude Code、Cursor、Codex
+git clone https://github.com/NianJiuZst/CodeGrap-Rust.git
+cd CodeGrap-Rust
+cargo install --path crates/cgr --locked
+cgr version --verbose
 ```
 
-`cgr install` 就地修改各 agent 自己的配置，保留注释和无关条目，不覆盖你固定的键，可用 `cgr uninstall` 完全还原；
-`--local` 只配置当前项目，`--dry-run` 只显示改动。agent 通过 `cgr serve --mcp`（stdio）连接，容器里的 agent 用
-`cgr serve --http 127.0.0.1:7878 --token …`。默认只列出 `codegraph-rust_explore`，其余工具用 `CGR_MCP_TOOLS` 打开。
+Cargo 将 `cgr` 安装到其可执行文件目录，通常为 `~/.cargo/bin`，请确认该目录已加入 `PATH`。
+Rust 和 C 编译器是构建时依赖，生成的可执行文件运行时不需要 Rust 工具链或 Node.js。
 
-索引会跟随编辑：MCP 服务会监听文件变化，也可以手动 `cgr sync`。增量同步只重新解析一次编辑可能影响到的引用，
-结果与全量重建逐项一致（由性质测试和 `cgr debug diff` 保证）。
+只构建、不安装到系统目录：
 
-## 语言与框架
+```sh
+cargo build --release --locked -p cgr
+./target/release/cgr --help
+```
 
-TypeScript / JavaScript（含 TSX/JSX）、Python、Go、Java、Rust、Kotlin。路由提取：Express、Flask、FastAPI、Django、Gin、Spring、Axum、Next.js；
-动态分派边：接口与实现、事件发射器、React 渲染与 JSX 子组件。C/C++、C#、PHP、Ruby、Swift 等本版本暂不支持。
+Windows 下的可执行文件为 `target\release\cgr.exe`。
 
-更多命令、环境变量和构建方式见 [README.md](README.md)。
+### Release 下载脚本
+
+仓库已包含发布打包流程和校验 SHA-256 的下载脚本。**截至 2026-11-01，尚未发布 GitHub Release。**
+以下命令需要 [Releases 页面](https://github.com/NianJiuZst/CodeGrap-Rust/releases)已有对应平台的归档与校验文件；
+这些文件发布前，请使用上面的源码安装方式。
+
+```sh
+# Linux / macOS：需要已有发布包
+curl -fsSL https://raw.githubusercontent.com/NianJiuZst/CodeGrap-Rust/main/scripts/install.sh | sh
+```
+
+```powershell
+# Windows，PowerShell 7+：需要已有发布包
+irm https://raw.githubusercontent.com/NianJiuZst/CodeGrap-Rust/main/scripts/install.ps1 | iex
+```
+
+发布流程定义了以下构建目标：
+
+| 平台 | 架构 | 打包方式 |
+|---|---|---|
+| Linux | x86_64、ARM64 | 静态 musl 可执行文件，`.tar.gz` |
+| macOS | Intel x86_64、Apple Silicon ARM64 | 可执行文件，`.tar.gz` |
+| Windows | x86_64、ARM64 | MSVC 可执行文件，`.zip` |
+
+下载脚本支持通过 `CGR_VERSION` 指定版本、通过 `CGR_INSTALL_DIR` 指定安装位置。
+默认目录为 Linux/macOS 的 `~/.local/bin`，以及 Windows 的 `%LOCALAPPDATA%\Programs\cgr`。
+
+## 快速开始
+
+在需要分析的代码仓库中运行：
+
+```sh
+cd /path/to/your-project
+cgr init
+cgr status --verify
+```
+
+使用仓库中的符号名探索代码：
+
+```sh
+cgr explore "AuthService loginUser SessionStore"
+cgr query loginUser --json
+cgr callers loginUser
+cgr callees loginUser
+cgr impact loginUser --depth 2
+```
+
+`AuthService`、`loginUser`、`SessionStore` 是示例名称，需要替换为项目实际符号。
+也可以使用自然语言，例如 `cgr explore "登录是如何走到数据库的"`。
+响应基于索引图谱与相关源码，包含行号，并受输出预算约束。
+
+将 MCP 服务注册到支持的 Agent：
+
+```sh
+cgr install --dry-run
+cgr install
+```
+
+安装器负责连接 Agent，`cgr init` 负责为每个项目建立索引。仅使用 CLI 时，编辑后运行 `cgr sync`；
+MCP 服务运行且启用监听时，会在防抖后自动同步源码变化。
+
+## 语言与框架支持
+
+### 源码语言
+
+| 语言 | 已支持的文件扩展名 |
+|---|---|
+| TypeScript / TSX | `.ts`、`.mts`、`.cts`、`.tsx` |
+| JavaScript / JSX | `.js`、`.mjs`、`.cjs`、`.jsx`、`.xsjs`、`.xsjslib` |
+| Python | `.py`、`.pyw` |
+| Go | `.go` |
+| Java | `.java` |
+| Rust | `.rs` |
+| Kotlin | `.kt`、`.kts` |
+
+提取阶段记录源码结构、符号和引用；引用解析阶段使用可获得的作用域、导入、接收者类型、模块及包信息。
+覆盖度受语言构造和项目配置影响，当前实现是静态代码图谱，不能替代完整编译器的类型检查。
+
+### 框架与动态分派规则
+
+已实现 **Express、Flask、FastAPI、Django、Gin、Spring、Axum、Next.js** 的路由提取 hook。
+框架检测依赖项目清单，因此缺失依赖声明或索引框架自身仓库时，路由覆盖可能不同；实测文档记录了已观察到的差异。
+
+合成边规则覆盖接口与实现分派、Go 结构化接口、事件发射器处理函数、React 重新渲染、JSX 父子组件关系等模式。
+这些规则带有来源信息和数量限制，属于针对特定模式的启发式分析，不覆盖任意运行时行为。
+
+当前版本暂不支持 C/C++、C#、PHP、Ruby、Swift 等上游语言，也不包含 Vue/Svelte 专用提取逻辑。
+
+## 命令行参考
+
+完整选项见 `cgr --help` 或 `cgr <command> --help`。使用 `--path` / `-p` 指定项目，例如
+`cgr --path /path/to/project explore "UserService save"`。查询命令可以在当前目录或其祖先目录查找已有索引。
+
+| 命令 | 用途 |
+|---|---|
+| `cgr init [path]` | 创建 `.cgr/` 并建立全量索引 |
+| `cgr index [path] --timings` | 全量重建并输出各阶段耗时 |
+| `cgr sync [path]` | 将新增、修改、删除的文件同步到索引 |
+| `cgr status --json --verify` | 查看数量、变更和快照校验结果 |
+| `cgr status --strict` | 索引存在待同步变更时返回非零状态 |
+| `cgr explore <query…>` | 获取相关源码、调用路径与修改影响 |
+| `cgr query <text> --kind function --json` | 检索符号，可按类型过滤 |
+| `cgr node <symbol-or-file> --code` | 查看符号或文件及其源码 |
+| `cgr files` | 查看已索引文件与结构 |
+| `cgr callers <symbol>` / `cgr callees <symbol>` | 查询调用方或被调用方 |
+| `cgr impact <symbol> --depth 2` | 查看修改影响的图谱邻域 |
+| `cgr implementations <symbol>` | 查找实现或子类型 |
+| `cgr affected <files…> --json` | 查找与变更文件关联的测试文件 |
+| `cgr cycles --json` | 查看导入环；存在环时退出码为 1 |
+| `cgr export --sqlite graph.sqlite` | 导出可供 SQL 分析的 SQLite 图谱 |
+| `cgr serve --mcp` / `cgr serve --http ADDR` | 启动 MCP 服务 |
+| `cgr install` / `cgr uninstall` | 添加或移除 Agent 集成 |
+| `cgr uninit [path] --yes` | 删除项目索引 |
+| `cgr version --verbose` | 查看构建、格式与内核版本信息 |
+
+正常成功返回 0；执行失败以及检测到循环依赖等情况返回 1；命令行参数错误返回 2。
+源码窗口来自当前工作区，因此编辑后需要及时同步图谱。
+
+## Agent 与 MCP 集成
+
+### 自动配置
+
+`cgr install` 检测已支持的 Agent，并在保留注释和无关配置的基础上编辑已有文件。
+用户固定的命令与设置会被保留，安装器补充缺失的集成键；`uninstall` 移除本工具的注册项与标记指令块。
+
+```sh
+cgr install --agent claude-code
+cgr install --agent cursor
+cgr install --agent codex
+cgr install --local --agent claude-code
+cgr install --no-hook
+cgr uninstall --agent cursor
+```
+
+| Agent | 全局注册 | 项目级行为 |
+|---|---|---|
+| Claude Code | MCP、使用说明、可选提示钩子与 explore 权限 | `.mcp.json`、`CLAUDE.md`、`.claude/settings.json` |
+| Cursor | `~/.cursor/mcp.json`，同时传递工作区路径 | `.cursor/mcp.json`，传入项目路径 |
+| Codex | `~/.codex/config.toml` 中的 MCP 注册与使用说明 | `--local` 只修改项目 `AGENTS.md`，服务需要另行全局注册 |
+
+Claude Code 支持 `CLAUDE_CONFIG_DIR`，Codex 支持 `CODEX_HOME`。
+`--dry-run` 预览修改，`--bin` 指定另一处可执行文件，`--no-hook` 跳过可选的 Claude Code 提示钩子，
+`--no-permissions` 跳过 explore 权限条目。
+
+### 手动配置 stdio
+
+对于使用 `mcpServers` JSON 配置的 MCP 客户端，可填写当前机器上的绝对路径：
+
+```json
+{
+  "mcpServers": {
+    "codegraph-rust": {
+      "command": "/absolute/path/to/cgr",
+      "args": ["serve", "--mcp", "--path", "/absolute/path/to/project"]
+    }
+  }
+}
+```
+
+先为该项目运行 `cgr init`。客户端可以提供 MCP roots，各工具也接受 `projectPath` 来选择其他已索引项目。
+客户端不提供项目根目录时，可显式使用 `--path`。如果服务只需要读取快照而不监听源码变化，可添加 `--no-watch`。
+
+默认只公开 **`codegraph-rust_explore`**。在服务进程环境中设置 `CGR_MCP_TOOLS` 可启用其他工具：
+
+```sh
+CGR_MCP_TOOLS=explore,node,callers,callees,impact,files,search,status cgr serve --mcp
+```
+
+| 工具 | 用途 |
+|---|---|
+| `codegraph-rust_explore` | 相关源码、指定符号间的调用路径与影响范围 |
+| `codegraph-rust_node` | 符号或文件详情与源码 |
+| `codegraph-rust_callers` / `codegraph-rust_callees` | 调用关系 |
+| `codegraph-rust_impact` | 修改影响邻域 |
+| `codegraph-rust_files` | 已索引文件树 |
+| `codegraph-rust_search` | 符号位置 |
+| `codegraph-rust_status` | 索引状态与待同步变更 |
+
+### HTTP 传输
+
+支持 HTTP 的客户端可以连接 `/mcp`：
+
+```sh
+export CGR_HTTP_TOKEN="replace-with-your-token"
+cgr serve --http 127.0.0.1:7878 --path /absolute/path/to/project
+```
+
+该示例监听 `http://127.0.0.1:7878/mcp`；配置 Token 后，请求需要携带 `Authorization: Bearer <token>`。
+也可以用 `--token` 传入。请根据需要访问源码的客户端选择监听地址和访问凭据。
+
+## 配置
+
+### 项目配置
+
+在项目根目录放置 `cgr.json`。兼容读取上游的 `codegraph.json`；两个文件同时存在时，
+`cgr.json` 提供的字段优先。
+
+```json
+{
+  "exclude": ["**/generated/**", "**/fixtures/**"],
+  "include": ["packages/shared/src/**"],
+  "deprioritize": ["third_party/**"],
+  "includeIgnored": false,
+  "extensions": {
+    ".customts": "typescript"
+  }
+}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `exclude` | 使用 gitignore 风格排除文件，也可排除已跟踪文件 |
+| `include` | 重新纳入被用户忽略规则排除的路径，不是源码白名单 |
+| `deprioritize` | 保留索引，但在检索中降低相对自有代码的排名 |
+| `includeIgnored` | 在文件发现阶段纳入嵌套 Git 仓库 |
+| `extensions` | 将额外扩展名映射到已有语言解析器 |
+
+显式 `exclude` 优先于 `include`；重新纳入路径时仍受内置目录跳过规则约束。
+无效配置会产生警告。扩展名映射只选择已有解析器，不会增加新的语言支持。
+
+文件发现遵循忽略规则，默认跳过常见依赖和构建目录；超过 1 MiB 的源码文件不参与提取。
+生成文件与测试路径会被记录为标记，供后续排名和分析使用。
+
+### 环境变量
+
+| 变量 | 行为 |
+|---|---|
+| `CGR_THREADS` | 索引工作线程数，检测到的内存预算可能降低实际数量 |
+| `CGR_MEMORY_MB` | 用于线程与批次大小的内存调优预算，不是进程 RSS 硬上限 |
+| `CGR_MCP_TOOLS` | 逗号分隔的 MCP 工具列表，兼容回退到 `CODEGRAPH_MCP_TOOLS` |
+| `CGR_EXPLORE_DEDUP=1` | 在同一个持久 MCP 对话中跳过已返回源码 |
+| `CGR_NO_PROMPT_HOOK=1` | 运行时禁用可选的 Claude Code 提示钩子 |
+| `CGR_HTTP_TOKEN` | 要求 HTTP 请求使用 Bearer Token |
+| `CGR_LOG` | 服务日志过滤条件，默认 `warn`，写入 stderr |
+| `CGR_TIMINGS` | 启用 CLI 索引阶段耗时输出 |
+| `CGR_FSYNC` | 默认使用平台同步；`full` 选择最强同步，`off` 跳过同步 |
+
+默认根据可用内存和 CPU 并行度选择索引资源。
+例如 `CGR_THREADS=4 CGR_MEMORY_MB=2048 cgr index --timings` 可请求较保守的资源配置；
+实际内存占用还取决于图谱规模和中间数据。
+
+## 架构设计
+
+```text
+源码文件 → 扫描 → 并行提取与 facts → 合并 → 引用解析与合成边
+                                               ↓
+CLI / MCP ← 查询处理 ← base + delta 视图 ← mmap 段 ← 发布快照
+```
+
+快照中保存冷热节点记录、字符串池、双向 CSR 边、引用解析结果与搜索索引。
+发布阶段写入新的不可变文件，再切换 manifest；读者持有稳定快照，通过共享锁防止所用文件被 GC 提前回收。
+
+增量更新比较时间戳、大小及内容哈希，提取变化文件，并重新解析受定义、导入、导出或继承关系影响的引用。
+一个 delta 始终针对 base 计算，不会形成无限叠加的层；变更过大时按阈值合并或重建。
+正确性目标是增量视图与全量重建一致，通过 canonical 图谱对比验证。
+
+| Crate | 职责 |
+|---|---|
+| `cg-core` | ID、节点/边类型、配置、资源调优及公共错误 |
+| `cg-kernel` | vendoring 的上游提取内核与适配补丁 |
+| `cg-scan` | 文件发现、语言检测、忽略规则 |
+| `cg-extract` | 并行提取、facts、错误隔离与 hook |
+| `cg-store` | 段格式、索引、快照、发布与垃圾回收 |
+| `cg-resolve` | 模块/导出表、引用解析、路由 hook 与合成边 |
+| `cg-query` | 检索、遍历、源码窗口及共享工具处理 |
+| `cg-sync` | 变更检测、增量更新与监听器协调 |
+| `cg-mcp` | JSON-RPC、stdio 与 HTTP 传输 |
+| `cg-install` | Agent 配置与使用说明块编辑 |
+| `cgr` | CLI、提示钩子、SQLite 导出与 benchmark 命令 |
+
+存储与算法的更多细节见[架构文档](docs/ARCHITECTURE.md)。
+
+## 索引生命周期
+
+- `cgr init` 创建 `.cgr/` 并建立索引，内部 `.gitignore` 避免索引内容进入版本控制。
+  `init --local-only` 还会在可用时使用 `.git/info/exclude`。
+- CLI 查询直接打开已有快照；MCP 进程随客户端保持运行，并可监听源码变化，无需独立数据库服务。
+- 编辑后通过 `cgr sync` 更新；`cgr index` 执行全量重建，也可用于刷新依赖新引擎分析规则的索引。
+  `status` 显示索引版本和待同步变更。
+- `cgr export --sqlite graph.sqlite` 生成供分析使用的独立 SQLite 文件，不会替换原生快照存储；
+  覆盖已有导出时使用 `--force`。
+- `cgr uninstall` 移除 Agent 集成；`cgr uninit --yes` 单独删除项目索引，保留源码。
+
+索引与导出图谱包含由代码派生的信息，应按所属仓库的访问与保留策略管理。
+
+## 开发与验证
+
+```sh
+cargo test --workspace --locked
+cargo clippy --workspace --exclude cg-kernel --all-targets -- -D warnings
+cargo build --release --locked -p cgr
+```
+
+需要更快的优化开发构建时，可使用 `cargo build --profile fastrel -p cgr`。
+release 使用 fat LTO；`fastrel` 减少链接工作，属于独立的性能构建配置。
+
+常用的正确性检查与测量命令：
+
+```sh
+cgr status --verify --strict
+cgr debug unresolved
+cgr debug diff
+cgr bench index /path/to/project --runs 3 --json
+cgr bench sync /path/to/project --edits 30 --seed 1 --verify --json
+cgr bench explore /path/to/project --count 100 --runs 3 --json
+scripts/bench-local.sh --help
+```
+
+`bench sync` 默认编辑临时副本，只有指定 `--in-place` 才会修改被测目录。
+`debug diff` 比较当前图谱和全量重建结果。benchmark 包装脚本提供内存、磁盘、Swap 前置检查及进程树监控，
+其运行条件可能需要先关闭其他应用。
+
+2026-11-01 的本机验证结果为 **116 项测试通过、1 项忽略**，四个真实仓库的增量与全量对比均通过。
+该结果针对当时的本机版本；本轮测量没有验证 Linux/Windows 运行情况或当前远程 CI。
+
+CI 配置包含格式检查、Clippy、内核可重复同步、多平台测试与发布构建检查。
+现有 smoke 辅助脚本仍有下述已知问题。更新内核时使用
+`scripts/sync-kernel.sh <upstream-checkout> <commit>`，并验证补丁和提取测试；vendoring 代码保留上游格式，
+与 workspace 自有代码的格式检查分开处理。
+
+## 当前限制
+
+- **覆盖度对齐**：语言范围、框架路由、合成边和 explore 返回内容与上游仍有差异，实测文档提供逐仓库对照。
+- **静态分析边界**：歧义引用可能保持未解析，动态行为仅覆盖已实现的模式；重要调用链仍应结合源码核查。
+- **内存调优**：`CGR_MEMORY_MB` 没有限制全部累计提取结果和引用解析表，大型仓库的 RSS 可能超过该值。
+- **提示钩子发现范围**：从未索引目录启动时，可选钩子可能广泛扫描；根目录探测在 88 秒后被终止。
+  可用 `install --no-hook` 或 `CGR_NO_PROMPT_HOOK=1`，通过 CLI/MCP 获取上下文而不启用该钩子。
+- **MCP 执行预算**：超时响应不会取消线程池中已开始的查询，当前服务不提供查询执行的硬隔离。
+- **Smoke 辅助脚本**：`scripts/smoke.sh` 的后台 MCP 命令会丢失 stdin，计时器也可能持有输出管道。
+  独立 stdin MCP 验证已通过，辅助脚本的失败结果保留在实测说明中。
+
+## 参与贡献
+
+建议先阅读[架构文档](docs/ARCHITECTURE.md)和对应 crate。
+图谱逻辑改动应聚焦具体行为，为解析或增量规则的变更提供回归用例，并对比增量与全量结果。
+扩展语言或框架规则时，请说明支持的语法与观察到的覆盖度。
+提交前执行相关测试、格式检查和 Clippy；内核更新应能通过固定的上游提交和补丁重现。
+
+## 致谢与许可证
+
+本项目基于 [Colby Mchenry 的 CodeGraph](https://github.com/colbymchenry/codegraph) 及其 Tree-sitter 提取工作。
+vendoring 的上游内核使用 MIT 许可证，固定版本记录在 `crates/cg-kernel/UPSTREAM_COMMIT` 中。
+
+本项目采用 [MIT License](LICENSE)。上游归属与 vendoring 组件说明见
+[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES)。
