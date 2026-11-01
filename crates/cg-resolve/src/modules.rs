@@ -73,7 +73,10 @@ impl<'v> Modules<'v> {
             rs_mod_to_file: FxHashMap::default(),
             rs_file_mod: FxHashMap::default(),
         };
-        let files: Vec<FileId> = view.files().collect();
+        let mut files: Vec<FileId> = view.files().collect();
+        // Delta file ids are appended, unlike a fresh build's path-ordered ids. Package
+        // representatives and first-match module aliases must use the same path order.
+        files.sort_unstable_by(|a, b| view.file(*a).path().cmp(view.file(*b).path()));
         for &f in &files {
             let fr = view.file(f);
             let path = fr.path();
@@ -96,6 +99,17 @@ impl<'v> Modules<'v> {
 
     pub fn path_of(&self, f: FileId) -> &'v str {
         self.view.file(f).path()
+    }
+
+    /// Stable file dependency recorded for an import, including package representatives
+    /// and declarations. A package's representative may change when a file is added.
+    pub fn target_file(&self, target: ImportTarget) -> Option<FileId> {
+        match target {
+            ImportTarget::File(file) => Some(file),
+            ImportTarget::Node(node) => Some(self.view.hot(node).file),
+            ImportTarget::Pkg(pkg) => self.pkgs[pkg.0 as usize].files.first().copied(),
+            ImportTarget::External | ImportTarget::NotFound => None,
+        }
     }
 
     // ----------------------------------------------------------------- indexing

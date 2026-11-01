@@ -9,6 +9,9 @@
   and lower indexing-worker priority on Linux/macOS/Windows.
 - Preallocate resolution outcomes, fuse hook trigger scans, and link event keys in bounded,
   deterministic parallel chunks with selective incremental reconnection.
+- Keep package/module representatives ordered by source path and track package/declaration
+  import dependencies, preserving incremental/full equality when package membership changes.
+  Engine revision 2 refreshes older dependency records on rebuild.
 - Compress BM25 postings, persist global document lengths, and add adaptive radix edge sorting.
   **Snapshot format 2 requires rebuilding old indexes with `cgr index`.**
 - Use bounded source text/line-offset views; add MCP backpressure and cooperative cancellation,

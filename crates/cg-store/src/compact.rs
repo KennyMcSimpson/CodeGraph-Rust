@@ -28,7 +28,9 @@ fn text<'a>(view: &'a View, pool: &mut Interner<'a>, id: StrId) -> StrId {
 pub fn compact<'a>(view: &'a View) -> Seg {
     let mut files: Vec<_> = view.files().collect();
     files.sort_by(|a, b| view.file(*a).path().as_bytes().cmp(view.file(*b).path().as_bytes()));
-    let mut fm = vec![NONE; files.iter().map(|f| f.idx() + 1).max().unwrap_or(0)];
+    // Edges-only files keep base import/export facts. Those advisory targets can still
+    // name a removed base file, including the last id; map them to NONE rather than panic.
+    let mut fm = vec![NONE; view.base.p.files.len().max(files.iter().map(|f| f.idx() + 1).max().unwrap_or(0))];
     let mut nm = vec![NONE; view.base.p.nodes_hot.len() + view.delta.as_ref().map_or(0, |d| d.seg.p.nodes_hot.len())];
     let mut rm = vec![NONE; view.n_refs()];
     let (mut nn, mut nr) = (0, 0);

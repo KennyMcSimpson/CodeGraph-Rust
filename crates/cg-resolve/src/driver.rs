@@ -216,10 +216,7 @@ pub fn resolve_all(e: &mut Engine<'_>) -> ResolveOutput {
     let mut import_targets = Vec::new();
     for f in view.files() {
         for t in &e.imp_targets[f.idx()] {
-            import_targets.push(match t {
-                crate::modules::ImportTarget::File(tf) => tf.0,
-                _ => NONE,
-            });
+            import_targets.push(e.modules.target_file(*t).map_or(NONE, |file| file.0));
         }
     }
     let mut export_targets = Vec::new();

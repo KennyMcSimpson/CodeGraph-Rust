@@ -77,7 +77,10 @@ mod tests {
         let req = Request { bin: "/opt/cgr".into(), local: true, project: dir.path().join("proj"), hook: false, permissions: false, dry_run: false };
         Cursor.install(&env, &req).unwrap();
         let text = std::fs::read_to_string(dir.path().join("proj/.cursor/mcp.json")).unwrap();
-        assert!(text.contains(&dir.path().join("proj").to_string_lossy().into_owned()));
+        // Compare the decoded argument: Windows backslashes are escaped in JSON text.
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let args = value["mcpServers"][brand::MCP_SERVER_NAME]["args"].as_array().unwrap();
+        assert!(args.contains(&json!(req.project.to_string_lossy())));
     }
 
     #[test]

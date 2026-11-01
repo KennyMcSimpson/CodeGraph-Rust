@@ -422,6 +422,8 @@ fn targeted_edits_match_full_rebuild() {
         ("py remove later", delete("py/pkg/later.py")),
         ("go define Later", put("go/a/later.go", "package a\n\nfunc Later() {}\n")),
         ("go remove Later", delete("go/a/later.go")),
+        ("go package representative changes", put("go/a/00.go", "package a\n\nfunc Zero() {}\n")),
+        ("go package representative restored", delete("go/a/00.go")),
         ("java define Later", put("java/com/ex/Later.java", "package com.ex;\n\npublic class Later {\n    public void go() {}\n}\n")),
         ("java remove Later", delete("java/com/ex/Later.java")),
         ("rs define later", replace_in("rs/src/util.rs", "fn inner() {}", "fn inner() {}\npub fn later() {}")),
@@ -537,14 +539,16 @@ fn compaction_preserves_live_graph_and_future_sync_without_source_access() {
     for (i, (f, c)) in FILES.iter().enumerate() {
         write(root, f, c, i as u64);
     }
+    write(root, "zz.ts", "export function lastFile() {}\n", 100);
+    write(root, "ts/tail-consumer.ts", "import { lastFile } from '../zz';\nexport function tailConsumer() { lastFile(); }\n", 101);
     index_project(root, &opts()).unwrap();
     write(root, "ts/util.ts", "export function util() { return 5; }\nexport function added() { return util(); }\n", 999);
-    fs::remove_file(root.join("ts/types.ts")).unwrap();
-    write(root, "ts/new.ts", "import { added } from './util';\nexport function main() { return added(); }\n", 1000);
+    fs::remove_file(root.join("zz.ts")).unwrap();
     let so = SyncOptions { index: opts(), ..Default::default() };
     sync(root, &so).unwrap();
     let store = Store::at(root);
     let snap = store.open_snapshot().unwrap();
+    assert!(snap.view.delta.is_some(), "compaction must exercise a delta, including a removed last-file dependency");
     let before = dump::canonical(&snap.view);
     // This view deliberately has no project/source root. Compaction still has everything
     // it needs in the mapped snapshot, including all facts for later syncs.
@@ -563,8 +567,12 @@ fn compaction_preserves_live_graph_and_future_sync_without_source_access() {
     drop(guard);
     assert_eq!(before, dump::canonical(&snap.view), "readers keep the previous complete generation during publication");
     write(root, "ts/new.ts", "import { util } from './util';\nexport function main() { return util(); }\n", 1001);
+    write(root, "zz.ts", "export function lastFile() {}\n", 1002);
     sync(root, &so).unwrap();
     assert_eq!(canonical_of(root), full_canonical(root));
+    let added = store.open_snapshot().unwrap();
+    let packed = cg_store::View::new(std::sync::Arc::new(cg_store::compact::compact(&added.view)));
+    assert_eq!(dump::canonical(&added.view), dump::canonical(&packed), "new-file ids also survive compaction");
 }
 
 #[test]

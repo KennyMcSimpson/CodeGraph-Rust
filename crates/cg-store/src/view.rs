@@ -219,7 +219,7 @@ impl View {
         }
         let b = &self.base;
         let mut file_pos = FxHashMap::default();
-        for (i, tri) in delta.p.delta_files.chunks_exact(3).enumerate() {
+        for (i, tri) in delta.p.delta_files.as_chunks::<3>().0.iter().enumerate() {
             file_pos.insert(tri[0], i);
         }
         let idx = DeltaIdx {
@@ -290,7 +290,7 @@ impl View {
 
     // ------------------------------------------------------------------ files
     pub fn n_files(&self) -> usize {
-        self.base.p.files.len() + self.d().map_or(0, |d| d.seg.p.delta_files.chunks_exact(3).filter(|t| t[1] == DeltaState::New as u32).count())
+        self.base.p.files.len() + self.d().map_or(0, |d| d.seg.p.delta_files.as_chunks::<3>().0.iter().filter(|t| t[1] == DeltaState::New as u32).count())
     }
 
     fn delta_file(&self, f: FileId) -> Option<(usize, DeltaState)> {
@@ -326,7 +326,7 @@ impl View {
         let nb = self.base.p.files.len() as u32;
         let added: Vec<u32> = match self.d() {
             Some(d) => {
-                let mut v: Vec<u32> = d.seg.p.delta_files.chunks_exact(3).filter(|t| t[1] == DeltaState::New as u32).map(|t| t[0]).collect();
+                let mut v: Vec<u32> = d.seg.p.delta_files.as_chunks::<3>().0.iter().filter(|t| t[1] == DeltaState::New as u32).map(|t| t[0]).collect();
                 v.sort_unstable();
                 v
             }
@@ -340,7 +340,7 @@ impl View {
             // The delta's own paths: replaced / added files.
             if let Some(local) = d.seg.paths.find(p.as_bytes()) {
                 let global = StrId(local.0 + d.base_paths);
-                for (i, tri) in d.seg.p.delta_files.chunks_exact(3).enumerate() {
+                for (i, tri) in d.seg.p.delta_files.as_chunks::<3>().0.iter().enumerate() {
                     if d.seg.p.files[i].path == global && tri[1] != DeltaState::Removed as u32 {
                         return Some(FileId(tri[0]));
                     }

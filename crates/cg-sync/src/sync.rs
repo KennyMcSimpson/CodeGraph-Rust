@@ -550,8 +550,13 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
         for g in &live {
             let mut srcs: FxHashSet<u32> = FxHashSet::default();
             for t in &engine.imp_targets[g.idx()] {
-                if let cg_resolve::ImportTarget::File(x) = t {
-                    srcs.insert(x.0);
+                match t {
+                    cg_resolve::ImportTarget::Pkg(pkg) => srcs.extend(engine.modules.pkgs[pkg.0 as usize].files.iter().map(|file| file.0)),
+                    _ => {
+                        if let Some(file) = engine.modules.target_file(*t) {
+                            srcs.insert(file.0);
+                        }
+                    }
                 }
             }
             for x in &engine.stars[g.idx()] {
@@ -624,10 +629,7 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
         // an import now resolving to another file (or to none) changes what the file binds
         let facts = base.p.file_facts[fi];
         for (i, old) in base.p.imports[facts.imp_start as usize..(facts.imp_start + facts.imp_count) as usize].iter().enumerate() {
-            let new_t = match engine.imp_targets[fi].get(i) {
-                Some(cg_resolve::ImportTarget::File(x)) => Some(view1.file(*x).path()),
-                _ => None,
-            };
+            let new_t = engine.imp_targets[fi].get(i).and_then(|t| engine.modules.target_file(*t)).map(|file| view1.file(file).path());
             let old_t = old.target.opt().map(|t| base.paths.get(base.p.files[t.idx()].path));
             if new_t != old_t {
                 file_hit = true;
@@ -885,15 +887,8 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
     }
     let ref_updates: Vec<RefUpdate> =
         (n_base_refs..n_base_refs + n_draft_refs).map(|id| update_of(&outcomes.get(&id).copied().unwrap_or(Outcome::PENDING))).collect();
-    let import_targets: Vec<u32> = ids
-        .iter()
-        .flat_map(|f| {
-            engine.imp_targets[f.idx()].iter().map(|t| match t {
-                cg_resolve::ImportTarget::File(tf) => tf.0,
-                _ => NONE,
-            })
-        })
-        .collect();
+    let import_targets: Vec<u32> =
+        ids.iter().flat_map(|f| engine.imp_targets[f.idx()].iter().map(|t| engine.modules.target_file(*t).map_or(NONE, |file| file.0))).collect();
 
     let export_targets: Vec<u32> = ids.iter().flat_map(|f| view1.exports_of(*f).iter().map(|ex| engine.export_target(*f, ex)).collect::<Vec<_>>()).collect();
     let mut edges_only: Vec<EdgesOnlyFile> = Vec::new();
@@ -940,7 +935,7 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
                     line: e.line.unwrap_or(NONE),
                     col: e.col.unwrap_or(NONE),
                     res: e.res,
-                    ref_idx: e.ref_idx.map_or(NONE, &final_ref),
+                    ref_idx: e.ref_idx.map_or(NONE, final_ref),
                     meta,
                     order: 0,
                 });

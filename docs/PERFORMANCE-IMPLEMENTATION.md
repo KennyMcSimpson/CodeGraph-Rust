@@ -33,6 +33,10 @@ The snapshot **format is now version 2** because token posting records changed. 
 index with `cgr index /path/to/project`. A format-1 segment is rejected by the format guard;
 it is not reinterpreted as compressed data. Source files and agent configuration are unaffected.
 The MCP background rebuild path coalesces repeated requests for an unreadable/old-format index.
+The engine revision is also 2: package/module representatives are ordered by source path rather
+than appended delta IDs. Package and declaration imports persist their file dependencies, so
+adding/removing a package's representative invalidates its consumers correctly. Compaction
+also handles advisory dependencies that still name the last removed base file.
 
 ### Validation and measurement status
 
@@ -42,6 +46,8 @@ native compaction without a source root and after source removal, old-reader sur
 incremental sync, exact watcher paths, directory/config events, dropped-event recovery, queue
 saturation, queued/running cancellation, rebuild admission and project LRU cleanup. Random and
 targeted multi-language edit sequences compare canonical graphs after every edit.
+The final randomized check uses the CI depth of six sequences of 100 edits, including package
+membership changes; targeted cases explicitly add and remove a lexically earlier Go file.
 
 The final macOS run passed **137 tests, with one ignored**, plus the locked release build,
 Clippy with `-D warnings`, formatting and the complete smoke script under macOS Bash 3.2.
@@ -133,11 +139,14 @@ the source checkout.
 
 倒排记录变更使快照格式升级为 **version 2**。升级后运行 `cgr index /path/to/project` 重建旧索引；
 格式检查会拒绝 version 1，避免按新结构误读。源码和 Agent 配置不受格式升级影响。
+引擎修订也升级为 2：包/模块代表文件按源码路径排序，不依赖 delta 追加的 ID；包与声明导入持久化
+对应文件依赖，增删代表文件时会正确使消费者失效。合并也能处理仍指向最后一个已删除基础文件的辅助依赖。
 
 最终 macOS 回归为 **137 项通过、1 项忽略**，覆盖线程确定性、临时映射前后字节一致、压缩边界、排序与
 双向 CSR、无源码合并、旧读者和后续同步、事件路径、目录/配置变化、漏事件恢复、排队与执行取消、
 重建去重及 LRU 资源释放。随机和定向编辑序列在每一步对照全量图谱。锁定依赖的 release 编译、
 Clippy `-D warnings`、格式检查和 macOS Bash 3.2 下的完整 smoke 检查均已通过。
+最终随机检查采用 CI 的 **6 组 × 100 步编辑**，定向用例还覆盖增删排序靠前的 Go 包成员。
 
 Express（142 文件）、Gin（99）、Tokio（814）、Django（2,984）的独立副本均通过分区校验；
 初始索引、添加函数并同步、恢复源码并同步这三个状态，都与全量重建的 canonical 图谱一致。
