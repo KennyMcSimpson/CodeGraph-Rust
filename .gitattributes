@@ -1,0 +1,3 @@
+# Generated tree-sitter grammar sources (23 MB of C) would otherwise make GitHub report the repo as C.
+crates/cg-kernel/grammars/** linguist-vendored linguist-generated
+crates/cg-kernel/** linguist-vendored
