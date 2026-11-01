@@ -915,7 +915,8 @@ fn client_path(raw: &str, base: Option<&str>) -> Option<(Vec<String>, bool)> {
             }
             p = rest;
             suffix = true;
-        } else if let Some(base) = base {
+        } else {
+            let base = base?;
             match client_path(base, None) {
                 Some((segs, s)) => {
                     suffix = s;
@@ -929,8 +930,6 @@ fn client_path(raw: &str, base: Option<&str>) -> Option<(Vec<String>, bool)> {
                 }
                 None => return None,
             }
-        } else {
-            return None;
         }
     } else if let Some(base) = base {
         match client_path(base, None) {
