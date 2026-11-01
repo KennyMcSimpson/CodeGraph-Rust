@@ -10,9 +10,57 @@ use std::sync::OnceLock;
 pub const PASS_EMITTER: u16 = 1;
 pub const PASS_REACT_RENDER: u16 = 2;
 pub const PASS_JSX: u16 = 3;
+/// Go type names that stand for other types (`go_implements`).
+pub const PASS_GO_TYPES: u16 = 4;
+/// Navigation calls and link markup (`frameworks::nav`).
+pub const PASS_NAV: u16 = 5;
+/// A Next.js proxy's entry and matcher (`frameworks::nav`).
+pub const PASS_PROXY: u16 = 6;
+/// Field-backed callback channels (`dynamic::callbacks`).
+pub const PASS_CALLBACK: u16 = 7;
+/// Object-literal registries and their dispatch (`dynamic::registries`).
+pub const PASS_REGISTRY: u16 = 8;
+/// HTTP client calls and client instances (`dynamic::cross_tier`).
+pub const PASS_HTTP: u16 = 9;
+/// Queue bindings, producers and consumers (`dynamic::cross_tier`).
+pub const PASS_QUEUE: u16 = 10;
+/// Event-bus / socket dispatches and handlers (`dynamic::cross_tier`).
+pub const PASS_BUS: u16 = 11;
+/// Celery tasks and their dispatch (`dynamic::celery`).
+pub const PASS_CELERY: u16 = 12;
+/// Spring application events (`dynamic::spring_events`).
+pub const PASS_SPRING: u16 = 13;
 
 pub const ROLE_EMIT: u8 = 0;
 pub const ROLE_ON: u8 = 1;
+pub const ROLE_GO_ALIAS: u8 = 0;
+pub const ROLE_GO_GENERIC: u8 = 1;
+
+/// Go true aliases and generic type parameters, from the facts of the file.
+pub struct GoTypeSites;
+
+impl FileHook for GoTypeSites {
+    fn name(&self) -> &'static str {
+        "go-type-sites"
+    }
+    fn applies(&self, lang: Lang, _rel: &str) -> bool {
+        lang == Lang::Go
+    }
+    fn run(&self, ctx: &HookCtx<'_>, out: &mut HookOut) {
+        for t in &ctx.facts.go_types {
+            out.sites.push(SiteFact {
+                pass: PASS_GO_TYPES,
+                role: if t.alias { ROLE_GO_ALIAS } else { ROLE_GO_GENERIC },
+                key_kind: 0,
+                key_a: t.name.clone(),
+                key_b: String::new(),
+                node_row: cg_core::NONE,
+                line: 0,
+                payload: t.type_params.join(","),
+            });
+        }
+    }
+}
 
 /// Event names too generic to link on (design doc 7.3).
 const GENERIC_EVENTS: &[&str] = &[

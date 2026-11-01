@@ -44,6 +44,13 @@ fn walk(cx: &mut Cx, n: Node, scope: u32) {
         "function_declaration" | "method_declaration" => function(cx, n, scope),
         "func_literal" => function(cx, n, scope),
         "type_spec" => type_spec(cx, n, scope),
+        "type_alias" => {
+            // `type A = B` names another type; a defined `type A B` is a type of its own
+            if let Some(name) = n.child_by_field_name("name") {
+                let name = cx.text(name).to_owned();
+                cx.facts.go_types.push(GoTypeFact { name, alias: true, type_params: Vec::new() });
+            }
+        }
         "short_var_declaration" => {
             let (l, r) = (n.child_by_field_name("left"), n.child_by_field_name("right"));
             if let (Some(l), Some(r)) = (l, r) {
@@ -186,6 +193,14 @@ fn function(cx: &mut Cx, n: Node, scope: u32) {
 }
 
 fn type_spec(cx: &mut Cx, n: Node, scope: u32) {
+    if let (Some(name), Some(tp)) = (n.child_by_field_name("name"), n.child_by_field_name("type_parameters")) {
+        let params: Vec<String> = kids(tp)
+            .filter(|d| d.kind() == "type_parameter_declaration")
+            .flat_map(|d| kids(d).filter(|c| c.kind() == "identifier").map(|c| cx.text(c).to_owned()).collect::<Vec<_>>())
+            .collect();
+        let name = cx.text(name).to_owned();
+        cx.facts.go_types.push(GoTypeFact { name, alias: false, type_params: params });
+    }
     let Some(ty) = n.child_by_field_name("type") else { return };
     if ty.kind() != "struct_type" {
         return;

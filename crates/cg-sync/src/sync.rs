@@ -539,7 +539,9 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
             export_changed.push(*f);
         }
         for (k, details) in &new {
-            if (old.get(k) != Some(details)) && !old.contains_key(k) {
+            // a changed signature can move a call to another overload of the name, even one
+            // whose target kept its identity
+            if old.get(k) != Some(details) {
                 d_names.insert(k.name.clone());
             }
         }
