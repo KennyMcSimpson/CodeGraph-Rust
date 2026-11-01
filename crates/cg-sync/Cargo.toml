@@ -1,8 +1,23 @@
 [package]
 name = "cg-sync"
+description = "Incremental sync: change detection, affected-reference computation, delta layers, file watching"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
 [dependencies]
 cg-core = { workspace = true }
+cg-scan = { workspace = true }
+cg-extract = { workspace = true }
 cg-store = { workspace = true }
+cg-resolve = { workspace = true }
+notify = { workspace = true }
+rayon = { workspace = true }
+rustc-hash = { workspace = true }
+tracing = { workspace = true }
+ignore = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+cg-query = { workspace = true }
+proptest = { workspace = true }

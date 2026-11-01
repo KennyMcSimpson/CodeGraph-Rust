@@ -125,6 +125,11 @@ pub fn finish(draft: Draft, input: FinishInput) -> Seg {
         names: &seg.names,
         paths: &seg.paths,
         text: &seg.text,
+        names_base: 0,
+        paths_base: 0,
+        text_base: 0,
+        node_base: 0,
+        file_slot: None,
     });
     seg.p.tokens_fst = Part::owned(ti.fst);
     seg.p.token_post_off = Part::owned(ti.post_off);

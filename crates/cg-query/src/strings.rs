@@ -13,7 +13,7 @@ pub fn tool(short: &str) -> String {
     format!("{}{short}", brand::MCP_TOOL_PREFIX)
 }
 
-fn brandify(s: &str) -> String {
+pub fn brandify(s: &str) -> String {
     s.replace("codegraph_explore", &explore_tool())
         .replace("codegraph_node", &tool("node"))
         .replace(".codegraph/", &format!("{}/", brand::DATA_DIR))

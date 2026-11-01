@@ -1,8 +1,18 @@
 [package]
 name = "cg-mcp"
+description = "MCP server (stdio and HTTP) over a codegraph-rust snapshot"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
 [dependencies]
 cg-core = { workspace = true }
 cg-store = { workspace = true }
+cg-query = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+cg-resolve = { workspace = true }
+tempfile = { workspace = true }

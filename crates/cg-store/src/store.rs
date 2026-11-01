@@ -315,6 +315,28 @@ impl Store {
         Ok(m)
     }
 
+    /// Drop the delta layer: the base alone is up to date again.
+    pub fn clear_delta(&self, _guard: &WriteGuard) -> Result<Manifest> {
+        let prev = self.read_manifest()?.ok_or_else(|| CgError::NoIndex(self.root.clone()))?;
+        if prev.delta.is_none() {
+            return Ok(prev);
+        }
+        let base_meta = self.open_manifest(&Manifest { delta: None, ..prev.clone() })?.view.base.meta.clone();
+        let m = Manifest {
+            generation: prev.generation + 1,
+            delta: None,
+            updated_ms: now_ms(),
+            n_files: base_meta.n_files,
+            n_nodes: base_meta.n_nodes,
+            n_edges: base_meta.n_edges,
+            syncs_since_merge: 0,
+            ..prev
+        };
+        self.write_manifest(&m)?;
+        self.gc();
+        Ok(m)
+    }
+
     // ------------------------------------------------------------------- gc
     /// Delete segment files no manifest (current or previous) references and no reader holds.
     pub fn gc(&self) {

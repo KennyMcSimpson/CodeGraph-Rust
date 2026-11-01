@@ -253,6 +253,21 @@ impl<'v> Engine<'v> {
         self.pkg_defs = defs;
     }
 
+    /// Module file a re-export (`export ... from 'x'`) points to, or NONE.
+    pub fn export_target(&self, f: FileId, ex: &cg_store::ExportRec) -> u32 {
+        if ex.from_spec.0 == NONE {
+            return NONE;
+        }
+        let spec = self.view.text_str(ex.from_spec);
+        if spec.is_empty() {
+            return NONE;
+        }
+        match self.modules.resolve_import(self.view.file(f).lang(), spec, f) {
+            crate::modules::ImportTarget::File(t) => t.0,
+            _ => NONE,
+        }
+    }
+
     // ---------------------------------------------------------------- lookups
     pub fn lookup_export(&self, f: FileId, name: &str, depth: u8) -> Option<Bound> {
         if depth > 8 || f.idx() >= self.exports.len() {

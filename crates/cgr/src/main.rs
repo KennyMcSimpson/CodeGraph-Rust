@@ -151,6 +151,27 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Serve the MCP protocol (stdio by default; `--http` for HTTP)
+    Serve {
+        /// MCP over stdio (the default transport; accepted for compatibility with `serve --mcp`)
+        #[arg(long)]
+        mcp: bool,
+        /// Listen for MCP over HTTP on this address instead of stdio, e.g. 127.0.0.1:7878
+        #[arg(long, value_name = "ADDR", num_args = 0..=1, default_missing_value = "127.0.0.1:7878")]
+        http: Option<String>,
+        /// Bearer token required by the HTTP transport (or set CGR_HTTP_TOKEN)
+        #[arg(long)]
+        token: Option<String>,
+        /// Do not watch files for changes
+        #[arg(long)]
+        no_watch: bool,
+    },
+    /// Hidden: nothing to unlock (locks are released by the OS when a process exits)
+    #[command(hide = true)]
+    Unlock,
+    /// Hidden: there is no daemon in this version
+    #[command(hide = true)]
+    Daemon,
     /// Print version information
     Version {
         #[arg(long)]
@@ -207,6 +228,15 @@ fn run(cli: Cli) -> Result<i32> {
         Cmd::Implementations { symbol } => cmds::implementations(base, &symbol),
         Cmd::Affected { files, stdin, depth, filter, json, quiet } => cmds::affected(base, files, stdin, depth, filter, json, quiet),
         Cmd::Cycles { path, json } => cmds::cycles(path.or(base), json),
+        Cmd::Serve { mcp: _, http, token, no_watch } => cmds::serve(base, http, token, no_watch),
+        Cmd::Unlock => {
+            println!("Nothing to unlock: locks are held by the operating system and released when a process exits.");
+            Ok(0)
+        }
+        Cmd::Daemon => {
+            println!("There is no daemon: each agent session runs its own `cgr serve --mcp` process.");
+            Ok(0)
+        }
         Cmd::Version { verbose } => cmds::version(verbose),
         Cmd::Debug(DebugCmd::Dump) => cmds::debug_dump(base),
         Cmd::Debug(DebugCmd::Unresolved) => cmds::debug_unresolved(base),

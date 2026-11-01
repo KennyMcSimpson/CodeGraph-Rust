@@ -1,6 +1,7 @@
 //! cg-store: the immutable snapshot format and everything that reads or writes it.
 
 pub mod build;
+pub mod delta;
 pub mod dump;
 pub mod edges;
 pub mod finish;
@@ -14,7 +15,8 @@ pub mod strpool;
 pub mod tokenize;
 pub mod view;
 
-pub use build::{build_draft, node_id_string, parse_node_id, tail_of, Draft, EdgeBuild, ProjectMeta};
+pub use build::{build_draft, build_draft_at, node_id_string, parse_node_id, tail_of, BuildBase, Draft, EdgeBuild, ProjectMeta};
+pub use delta::{assemble_delta, base_offsets, DeltaParts, EdgesOnlyFile};
 pub use finish::{finish, FinishInput, RefUpdate};
 pub use part::Part;
 pub use records::*;

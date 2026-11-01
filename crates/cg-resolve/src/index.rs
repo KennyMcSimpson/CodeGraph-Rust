@@ -176,6 +176,7 @@ pub fn build_seg(root: &Path, opts: &IndexOptions) -> Result<Built> {
         edges: all,
         emeta: finish_emeta,
         import_targets: out.import_targets,
+        export_targets: out.export_targets,
         ..Default::default()
     };
     let seg = pool.install(|| finish(Draft { seg, edges, emeta }, input));
@@ -189,7 +190,7 @@ pub fn build_seg(root: &Path, opts: &IndexOptions) -> Result<Built> {
     Ok(Built { seg, report, project })
 }
 
-fn deprioritize_matcher(root: &Path, config: &ProjectConfig) -> Option<ignore::gitignore::Gitignore> {
+pub fn deprioritize_matcher(root: &Path, config: &ProjectConfig) -> Option<ignore::gitignore::Gitignore> {
     if config.deprioritize.is_empty() {
         return None;
     }
@@ -206,9 +207,15 @@ pub fn index_project(root: &Path, opts: &IndexOptions) -> Result<IndexReport> {
     store.create()?;
     store.cleanup_tmp();
     let guard = store.write_lock(Duration::from_secs(30))?;
+    index_with_guard(&store, &guard, root, opts)
+}
+
+/// Same as [`index_project`] for a caller that already holds the write lock (incremental sync's
+/// full-rebuild fallback, merges).
+pub fn index_with_guard(store: &Store, guard: &cg_store::WriteGuard, root: &Path, opts: &IndexOptions) -> Result<IndexReport> {
     let Built { seg, mut report, .. } = build_seg(root, opts)?;
     let t = Instant::now();
-    let m = store.publish_base(&seg, &guard)?;
+    let m = store.publish_base(&seg, guard)?;
     report.segment_bytes = std::fs::metadata(store.dir.join(&m.base)).map(|m| m.len()).unwrap_or(0);
     report.timings.push(("write", t.elapsed()));
     report.peak_rss_mb = peak_rss_mb();

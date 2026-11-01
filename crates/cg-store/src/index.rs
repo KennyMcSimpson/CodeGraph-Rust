@@ -153,6 +153,14 @@ pub struct TokenInputs<'a> {
     pub names: &'a StrPool,
     pub paths: &'a StrPool,
     pub text: &'a StrPool,
+    /// Delta layers: ids in the records are global (base length + local id); these are the
+    /// base lengths (all zero for a base segment).
+    pub names_base: u32,
+    pub paths_base: u32,
+    pub text_base: u32,
+    pub node_base: u32,
+    /// Delta layers: global `FileId` -> position in `files`.
+    pub file_slot: Option<&'a FxHashMap<u32, usize>>,
 }
 
 pub fn build_token_index(inp: &TokenInputs<'_>) -> TokenIndex {
@@ -173,7 +181,7 @@ pub fn build_token_index(inp: &TokenInputs<'_>) -> TokenIndex {
         let mut len = 0usize;
         // name: whole lower-cased name plus identifier segments
         let nt = name_cache.entry(h.name.0).or_insert_with(|| {
-            let name = inp.names.get(h.name);
+            let name = inp.names.get(StrId(h.name.0 - inp.names_base));
             scratch.clear();
             split_identifier(name, &mut scratch);
             let mut ids: Vec<u32> = scratch.iter().map(|s| dict.id(s)).collect();
@@ -192,7 +200,7 @@ pub fn build_token_index(inp: &TokenInputs<'_>) -> TokenIndex {
         if h.qname.0 != h.name.0 && h.qname.0 != NONE {
             let qt = qname_cache.entry(h.qname.0).or_insert_with(|| {
                 scratch.clear();
-                split_identifier(inp.names.get(h.qname), &mut scratch);
+                split_identifier(inp.names.get(StrId(h.qname.0 - inp.names_base)), &mut scratch);
                 let mut ids: Vec<u32> = scratch.iter().map(|s| dict.id(s)).collect();
                 ids.sort_unstable();
                 ids.dedup();
@@ -205,7 +213,7 @@ pub fn build_token_index(inp: &TokenInputs<'_>) -> TokenIndex {
         }
         if c.signature.0 != NONE {
             scratch.clear();
-            tokenize::words(inp.text.get(c.signature), 32, &mut scratch);
+            tokenize::words(inp.text.get(StrId(c.signature.0 - inp.text_base)), 32, &mut scratch);
             for w in scratch.iter() {
                 if !tokenize::is_stopword(w) {
                     per_node.push((dict.id(w), F_SIG));
@@ -215,7 +223,7 @@ pub fn build_token_index(inp: &TokenInputs<'_>) -> TokenIndex {
         }
         if c.docstring.0 != NONE {
             scratch.clear();
-            tokenize::words(inp.text.get(c.docstring), 64, &mut scratch);
+            tokenize::words(inp.text.get(StrId(c.docstring.0 - inp.text_base)), 64, &mut scratch);
             for w in scratch.iter() {
                 if !tokenize::is_stopword(w) {
                     per_node.push((dict.id(w), F_DOC));
@@ -224,9 +232,10 @@ pub fn build_token_index(inp: &TokenInputs<'_>) -> TokenIndex {
             }
         }
         if kind == Some(NodeKind::File) {
-            let f = &inp.files[h.file.0 as usize];
+            let slot = inp.file_slot.map_or(h.file.0 as usize, |m| m[&h.file.0]);
+            let f = &inp.files[slot];
             scratch.clear();
-            for seg in inp.paths.get(f.path).split('/') {
+            for seg in inp.paths.get(StrId(f.path.0 - inp.paths_base)).split('/') {
                 split_identifier(seg, &mut scratch);
             }
             for w in scratch.iter() {
@@ -245,7 +254,7 @@ pub fn build_token_index(inp: &TokenInputs<'_>) -> TokenIndex {
                 tf += 1;
                 i += 1;
             }
-            entries.push(Entry { tok, node: n as u32, mask, tf: tf.min(255) as u8 });
+            entries.push(Entry { tok, node: n as u32 + inp.node_base, mask, tf: tf.min(255) as u8 });
         }
     }
 

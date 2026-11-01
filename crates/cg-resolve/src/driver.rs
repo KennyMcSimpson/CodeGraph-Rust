@@ -16,6 +16,8 @@ pub struct ResolveOutput {
     pub emeta: Vec<String>,
     /// Per `ImportRec` in segment order.
     pub import_targets: Vec<u32>,
+    /// Per `ExportRec` in segment order: the module a re-export points to.
+    pub export_targets: Vec<u32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -32,6 +34,15 @@ fn in_round(kind: u8, round: Round) -> bool {
         ))
     );
     (round == Round::One) == first
+}
+
+/// Which resolution round handles a reference of this wire kind.
+pub fn round_of(kind: u8) -> Round_ {
+    if in_round(kind, Round::One) {
+        Round_::One
+    } else {
+        Round_::Two
+    }
 }
 
 /// Resolve the references `ids` (global ids) of the given files. Used by full builds (all files
@@ -174,7 +185,14 @@ pub fn resolve_all(e: &mut Engine<'_>) -> ResolveOutput {
             });
         }
     }
+    let mut export_targets = Vec::new();
+    for f in view.files() {
+        for ex in view.exports_of(f) {
+            export_targets.push(e.export_target(f, ex));
+        }
+    }
     ResolveOutput {
+        export_targets,
         updates: outcomes.iter().map(update_of).collect(),
         edges,
         emeta: vec![FNREF_META.to_owned()],

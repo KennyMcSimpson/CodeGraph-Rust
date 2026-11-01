@@ -95,6 +95,82 @@ pub fn assemble(edges: &mut Vec<EdgeBuild>, n_nodes: usize) -> EdgeAsm {
     EdgeAsm { out_off, out_dst, out_kind, out_site, out_res, out_ref, in_off, in_src, in_eid, edge_meta }
 }
 
+/// Edge arrays of a delta layer: only nodes that have edges appear (sorted), design doc 5.6.
+pub struct SparseAsm {
+    pub src_nodes: Vec<u32>,
+    pub dst_nodes: Vec<u32>,
+    pub asm: EdgeAsm,
+}
+
+/// Like [`assemble`], but the CSR is indexed by position in the sorted list of source nodes
+/// (`d_src_nodes`) and, for the reverse side, of destination nodes (`d_dst_nodes`).
+pub fn assemble_sparse(edges: &mut Vec<EdgeBuild>) -> SparseAsm {
+    edges.par_sort_unstable_by(cmp);
+    edges.dedup_by(|b, a| {
+        a.src == b.src && a.dst == b.dst && (a.kind & 0x0F) == (b.kind & 0x0F) && a.line == b.line && a.col == b.col
+    });
+    let m = edges.len();
+    let mut src_nodes: Vec<u32> = Vec::new();
+    let mut out_off: Vec<u32> = vec![0];
+    for (i, e) in edges.iter().enumerate() {
+        if src_nodes.last() != Some(&e.src) {
+            if !src_nodes.is_empty() {
+                out_off.push(i as u32);
+            }
+            src_nodes.push(e.src);
+        }
+    }
+    if !src_nodes.is_empty() {
+        out_off.push(m as u32);
+    }
+    let mut out_dst = Vec::with_capacity(m);
+    let mut out_kind = Vec::with_capacity(m);
+    let mut out_site = Vec::with_capacity(m);
+    let mut out_res = Vec::with_capacity(m);
+    let mut out_ref = Vec::with_capacity(m);
+    let mut edge_meta = Vec::new();
+    for (i, e) in edges.iter().enumerate() {
+        out_dst.push(e.dst);
+        out_kind.push(e.kind);
+        out_site.push(EdgeSite { line: e.line, col: e.col });
+        out_res.push(e.res);
+        out_ref.push(e.ref_idx);
+        if e.meta != cg_core::NONE {
+            edge_meta.push(EdgeMetaRec { eid: i as u32, text: cg_core::StrId(e.meta) });
+        }
+    }
+    let mut dst_nodes: Vec<u32> = out_dst.clone();
+    dst_nodes.sort_unstable();
+    dst_nodes.dedup();
+    let mut in_off = vec![0u32; dst_nodes.len() + 1];
+    for d in &out_dst {
+        let pos = dst_nodes.binary_search(d).expect("destination listed");
+        in_off[pos + 1] += 1;
+    }
+    for i in 0..dst_nodes.len() {
+        in_off[i + 1] += in_off[i];
+    }
+    let mut fill = in_off.clone();
+    let mut in_src = vec![0u32; m];
+    let mut in_eid = vec![0u32; m];
+    for (si, w) in out_off.windows(2).enumerate() {
+        for eid in w[0]..w[1] {
+            let pos = dst_nodes.binary_search(&out_dst[eid as usize]).expect("destination listed");
+            let slot = fill[pos] as usize;
+            in_src[slot] = src_nodes[si];
+            in_eid[slot] = eid;
+            fill[pos] += 1;
+        }
+    }
+    SparseAsm { src_nodes, dst_nodes, asm: EdgeAsm { out_off, out_dst, out_kind, out_site, out_res, out_ref, in_off, in_src, in_eid, edge_meta } }
+}
+
+pub fn install_sparse(seg: &mut Seg, a: SparseAsm) {
+    seg.p.d_src_nodes = Part::owned(a.src_nodes);
+    seg.p.d_dst_nodes = Part::owned(a.dst_nodes);
+    install(seg, a.asm);
+}
+
 pub fn install(seg: &mut Seg, a: EdgeAsm) {
     seg.meta.n_edges = a.out_dst.len() as u32;
     seg.p.out_off = Part::owned(a.out_off);

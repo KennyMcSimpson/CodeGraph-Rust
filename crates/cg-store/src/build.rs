@@ -61,6 +61,18 @@ pub struct Draft {
     pub emeta: Vec<String>,
 }
 
+impl Draft {
+    /// A copy sharing the (immutable) partitions; used to assemble a provisional delta for
+    /// resolution and the final one from the same draft.
+    pub fn duplicate(&self) -> Draft {
+        Draft {
+            seg: Seg::from_parts(self.seg.meta.clone(), self.seg.p.clone()),
+            edges: self.edges.clone(),
+            emeta: self.emeta.clone(),
+        }
+    }
+}
+
 /// Decode an upstream-style node id into (digest, column suffix).
 pub fn parse_node_id(id: &str) -> ([u8; 16], u32) {
     let mut digest = [0u8; 16];
@@ -156,8 +168,29 @@ impl ListBuilder {
     }
 }
 
+/// Id spaces of the base segment that a delta layer continues (design doc 5.2): records of the
+/// delta carry global ids (`base length + local id`), while the delta's own pools and index
+/// partitions stay local.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BuildBase {
+    pub nodes: u32,
+    pub names: u32,
+    pub paths: u32,
+    pub text: u32,
+    pub lists: u32,
+}
+
 pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
+    build_draft_at(batches, None, project)
+}
+
+/// `delta`: the global `FileId` of each batch and the base id spaces. With `None` this builds a
+/// base segment (dense edge arrays); with `Some` the result has the delta layout.
+pub fn build_draft_at(batches: &[FileBatch], delta: Option<(&[FileId], BuildBase)>, project: &ProjectMeta) -> Draft {
     debug_assert!(batches.windows(2).all(|w| w[0].rel.as_bytes() < w[1].rel.as_bytes()), "batches must be sorted by path");
+    let bb = delta.map(|d| d.1).unwrap_or_default();
+    let is_delta = delta.is_some();
+    let file_id_of = |fi: usize| -> FileId { delta.map_or(FileId::new(fi), |d| d.0[fi]) };
     let arena = StrArena::default();
     let mut names: Interner = Interner::default();
     let mut paths: Interner = Interner::default();
@@ -182,18 +215,18 @@ pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
     let mut fnames: Vec<(u32, u32)> = Vec::with_capacity(batches.len() * 2);
 
     for (fi, b) in batches.iter().enumerate() {
-        let file = FileId::new(fi);
+        let file = file_id_of(fi);
         let rows = b.rows();
-        let nstart = hot.len() as u32;
+        let nstart = hot.len() as u32 + bb.nodes;
         let kcount = rows.node_count();
         let ncount = kcount + b.extra_nodes.len();
         let rstart = refs.len() as u32;
         let path_t = paths.intern(&b.rel);
         let base = basename(&b.rel);
-        fnames.push((names.intern(base), fi as u32));
+        fnames.push((names.intern(base), file.0));
         let st = stem(base);
         if st != base {
-            fnames.push((names.intern(st), fi as u32));
+            fnames.push((names.intern(st), file.0));
         }
 
         // ---- nodes ----
@@ -208,7 +241,7 @@ pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
                 qname: StrId(names.intern(n.qname())),
                 start_line: n.start_line(),
                 end_line: n.end_line(),
-                parent: NodeIdx(if hot.len() as u32 == nstart { NONE } else { nstart }),
+                parent: NodeIdx(if hot.len() as u32 + bb.nodes == nstart { NONE } else { nstart }),
                 _p: 0,
             });
             let sig = opt_text(&mut text, n.signature());
@@ -304,7 +337,7 @@ pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
                 continue;
             };
             if e.kind() == EdgeKind::Contains {
-                hot[dst as usize].parent = NodeIdx(src);
+                hot[(dst - bb.nodes) as usize].parent = NodeIdx(src);
             }
             let meta = match e.metadata_json() {
                 Some(m) => {
@@ -479,16 +512,16 @@ pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
     let (text_sorted, text_map) = text.finalize();
     let rn = |s: &mut StrId| {
         if s.0 != NONE {
-            s.0 = names_map[s.0 as usize]
+            s.0 = names_map[s.0 as usize] + bb.names
         }
     };
     let rt = |s: &mut StrId| {
         if s.0 != NONE {
-            s.0 = text_map[s.0 as usize]
+            s.0 = text_map[s.0 as usize] + bb.text
         }
     };
     files.par_iter_mut().for_each(|f| {
-        f.path.0 = paths_map[f.path.0 as usize];
+        f.path.0 = paths_map[f.path.0 as usize] + bb.paths;
         let mut e = f.errors;
         rt(&mut e);
         f.errors = e;
@@ -502,10 +535,19 @@ pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
         rt(&mut c.docstring);
         rt(&mut c.return_type);
         rt(&mut c.extra);
+        if c.decorators.0 != NONE {
+            c.decorators.0 += bb.lists;
+        }
+        if c.type_params.0 != NONE {
+            c.type_params.0 += bb.lists;
+        }
     });
     refs.par_iter_mut().for_each(|r| {
         rt(&mut r.name);
         rn(&mut r.tail);
+        if r.candidates.0 != NONE {
+            r.candidates.0 += bb.lists;
+        }
     });
     imports.par_iter_mut().for_each(|i| {
         rt(&mut i.local);
@@ -522,10 +564,10 @@ pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
         rt(&mut b.decl_type);
         rt(&mut b.init_ctor);
     });
-    lists.items.par_iter_mut().for_each(|i| *i = text_map[*i as usize]);
+    lists.items.par_iter_mut().for_each(|i| *i = text_map[*i as usize] + bb.text);
     sites.par_iter_mut().for_each(|st| {
-        st.key_a = text_map[st.key_a as usize];
-        st.key_b = text_map[st.key_b as usize];
+        st.key_a = text_map[st.key_a as usize] + bb.text;
+        st.key_b = text_map[st.key_b as usize] + bb.text;
         rt(&mut st.payload);
     });
     let mut fname_idx: Vec<FileNameRec> =
@@ -550,11 +592,11 @@ pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
     let skip = |k: u8| {
         matches!(NodeKind::from_u8(k), Some(NodeKind::File | NodeKind::Import | NodeKind::Export | NodeKind::Parameter) | None)
     };
-    let (name_post_off, name_post) = postings(names_pool.len(), &hot, |h| h.name, &skip);
-    let (qname_post_off, qname_post) = postings(names_pool.len(), &hot, |h| h.qname, &skip);
+    let (name_post_off, name_post) = postings(names_pool.len(), &hot, bb, |h| StrId(h.name.0 - bb.names), &skip);
+    let (qname_post_off, qname_post) = postings(names_pool.len(), &hot, bb, |h| StrId(h.qname.0 - bb.names), &skip);
 
     let meta = SegMeta {
-        kind: "base".into(),
+        kind: if is_delta { "delta" } else { "base" }.into(),
         format_version: brand::FORMAT_VERSION,
         engine_version: brand::ENGINE_VERSION,
         kernel_abi: cg_extract::KERNEL_ABI_VERSION as u32,
@@ -602,8 +644,14 @@ pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
     p.fname_idx = Part::owned(fname_idx);
     // Draft edges: the extraction edges only, so the View is usable before resolution.
     let mut seg = Seg::from_parts(meta, p);
-    let asm = crate::edges::assemble(&mut edges, seg.p.nodes_hot.len());
-    crate::edges::install(&mut seg, asm);
+    if is_delta {
+        let mut copy = edges.clone();
+        let asm = crate::edges::assemble_sparse(&mut copy);
+        crate::edges::install_sparse(&mut seg, asm);
+    } else {
+        let asm = crate::edges::assemble(&mut edges, seg.p.nodes_hot.len());
+        crate::edges::install(&mut seg, asm);
+    }
     Draft { seg, edges, emeta }
 }
 
@@ -611,6 +659,7 @@ pub fn build_draft(batches: &[FileBatch], project: &ProjectMeta) -> Draft {
 fn postings(
     n_strings: usize,
     hot: &[NodeHot],
+    bb: BuildBase,
     key: impl Fn(&NodeHot) -> StrId,
     skip: &impl Fn(u8) -> bool,
 ) -> (Vec<u32>, Vec<u32>) {
@@ -628,7 +677,7 @@ fn postings(
     for (i, h) in hot.iter().enumerate() {
         if !skip(h.kind) {
             let k = key(h).0 as usize;
-            post[fill[k] as usize] = i as u32;
+            post[fill[k] as usize] = i as u32 + bb.nodes;
             fill[k] += 1;
         }
     }

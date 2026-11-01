@@ -60,9 +60,13 @@ pub fn index(path: Option<PathBuf>, _force: bool, quiet: bool, timings: bool) ->
 }
 
 pub fn sync(path: Option<PathBuf>, quiet: bool) -> Result<i32> {
-    let root = start_dir(path)?;
-    let _ = (root, quiet);
-    Err(anyhow!("sync is not available in this build yet"))
+    let start = start_dir(path)?;
+    let store = cg_store::Store::locate(&start).ok_or_else(|| anyhow!("no {} index found from {} (run `{} init` first)", brand::DATA_DIR, start.display(), brand::BIN_NAME))?;
+    let report = cg_sync::sync(&store.root, &Default::default())?;
+    if !quiet {
+        println!("{}", report.summary());
+    }
+    Ok(0)
 }
 
 pub fn status(path: Option<PathBuf>, json: bool, strict: bool, verify: bool) -> Result<i32> {
@@ -83,6 +87,7 @@ pub fn status(path: Option<PathBuf>, json: bool, strict: bool, verify: bool) -> 
             "generation": m.generation, "engineVersion": m.engine_version, "engineOutdated": info.engine_outdated,
             "bytes": info.bytes, "updatedAt": info.built_at, "deltaLayer": m.delta.is_some(),
             "verified": verify,
+            "changes": cg_sync::measure_changes(proj.root(), &proj.snap.view).ok().map(|c| json!({"added": c.added, "modified": c.modified, "removed": c.removed})),
         }))?);
     } else {
         println!("files {}  nodes {}  edges {}  generation {}", m.n_files, m.n_nodes, m.n_edges, m.generation);
@@ -94,7 +99,16 @@ pub fn status(path: Option<PathBuf>, json: bool, strict: bool, verify: bool) -> 
             println!("  note: index built by an older engine; run `{} index` to rebuild", brand::BIN_NAME);
         }
     }
-    let _ = strict;
+    let changes = cg_sync::measure_changes(proj.root(), &proj.snap.view).ok();
+    if !json {
+        match &changes {
+            Some(c) => println!("  changes since last sync: {}", c.describe()),
+            None => println!("  changes since last sync: unknown"),
+        }
+    }
+    if strict && changes.map_or(false, |c| c.total() > 0) {
+        return Ok(1);
+    }
     Ok(0)
 }
 
@@ -305,3 +319,48 @@ pub fn debug_unresolved(base: Option<PathBuf>) -> Result<i32> {
 
 #[allow(dead_code)]
 fn unused(_: NodeIdx) {}
+
+pub fn serve(base: Option<PathBuf>, http: Option<String>, token: Option<String>, no_watch: bool) -> Result<i32> {
+    // stdout belongs to the protocol: all logging goes to stderr
+    let filter = std::env::var(brand::env::LOG).unwrap_or_else(|_| "warn".into());
+    let _ = tracing_subscriber::fmt().with_writer(std::io::stderr).with_env_filter(tracing_subscriber::EnvFilter::new(filter)).try_init();
+    let dedup = brand::env::get("CGR_EXPLORE_DEDUP", Some("CODEGRAPH_EXPLORE_DEDUP")).map_or(false, |v| v == "1");
+    let cfg_path = base.map(|p| p.canonicalize().unwrap_or(p));
+    let cfg = cg_mcp::Config { path: cfg_path.clone(), tools: cg_mcp::defs::allowlist_from_env(), dedup };
+    let server = cg_mcp::Server::new(cfg);
+    server.set_rebuild_hook(std::sync::Arc::new(|root: &Path| {
+        let _ = cg_resolve::index_project(root, &Default::default());
+    }));
+    server.set_status_hook(std::sync::Arc::new(|p: &Project| cg_sync::measure_changes(p.root(), &p.snap.view).ok().map(|c| c.describe())));
+    let watchers: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<PathBuf, cg_sync::WatchHandle>>> = Default::default();
+    if !no_watch {
+        let w = watchers.clone();
+        server.set_open_hook(std::sync::Arc::new(move |root: &Path| {
+            let mut map = w.lock().unwrap_or_else(|e| e.into_inner());
+            if !map.contains_key(root) {
+                map.insert(root.to_path_buf(), cg_sync::spawn_watcher(root.to_path_buf(), Default::default()));
+            }
+        }));
+        let w = watchers.clone();
+        server.on_shutdown(Box::new(move || {
+            let handles: Vec<_> = w.lock().unwrap_or_else(|e| e.into_inner()).drain().map(|(_, h)| h).collect();
+            for h in handles {
+                h.stop();
+            }
+        }));
+        // watch the default project from the start
+        let start = std::env::var_os("CGR_WATCH_ROOT").map(PathBuf::from).or_else(|| cfg_path.clone()).or_else(|| std::env::current_dir().ok());
+        if let Some(start) = start {
+            server.preopen(&start);
+        }
+    }
+    match http {
+        Some(addr) => {
+            let token = token.or_else(|| std::env::var("CGR_HTTP_TOKEN").ok()).filter(|t| !t.is_empty());
+            eprintln!("{} MCP over HTTP on http://{addr}/mcp", brand::PROJECT_NAME);
+            cg_mcp::serve_http(server, cg_mcp::HttpConfig { addr, token, endpoint: "/mcp".into() }, None)?;
+        }
+        None => cg_mcp::serve_stdio(server)?,
+    }
+    Ok(0)
+}

@@ -344,8 +344,9 @@ impl View {
         if let Some(d) = self.d() {
             // The delta's own paths: replaced / added files.
             if let Some(local) = d.seg.paths.find(p.as_bytes()) {
+                let global = StrId(local.0 + d.base_paths);
                 for (i, tri) in d.seg.p.delta_files.chunks_exact(3).enumerate() {
-                    if d.seg.p.files[i].path == local && tri[1] != DeltaState::Removed as u32 {
+                    if d.seg.p.files[i].path == global && tri[1] != DeltaState::Removed as u32 {
                         return Some(FileId(tri[0]));
                     }
                 }

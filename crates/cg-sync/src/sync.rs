@@ -1,0 +1,798 @@
+//! The sync algorithm (design doc 9.3). A delta layer is always computed against the *base*
+//! segment and the current source tree, so deltas never stack and "incremental equals full" is a
+//! statement about one function:
+//!
+//!   View(base, delta(base, tree)) == fresh index of tree
+//!
+//! 1. diff the tree against the base (changed files C: replaced / new / removed / touched);
+//! 2. re-extract C, build a provisional delta, and from it a resolution engine over the new state;
+//! 3. find the references whose result may differ (affected refs) and resolve exactly those;
+//! 4. write the delta: nodes/refs/facts of replaced and new files, rewritten refs and edges of
+//!    unchanged files whose references changed.
+//!
+//! When too much is affected, or the configuration changed, the base is rebuilt instead.
+
+use crate::detect::{diff_view, Diff};
+use cg_core::budget::MemBudget;
+use cg_core::config::ProjectConfig;
+use cg_core::{brand, CgError, EdgeKind, FileId, NodeIdx, RefKind, Result, StrId, NONE};
+use cg_extract::{extract_stream, fileflags, ExtractConfig, FileBatch};
+use cg_resolve::driver::{make_edge, round_of, update_of, FNREF_META};
+use cg_resolve::{hooks_for, index_with_guard, resolve_refs, Engine, IndexOptions, Outcome, ProjectInfo, Round_};
+use cg_scan::{scan, ScanOptions};
+use cg_store::{
+    assemble_delta, base_offsets, build_draft_at, outkind, status, DeltaParts, DeltaState, EdgeBuild, EdgesOnlyFile, FileRec, ProjectMeta, RefRec,
+    RefUpdate, Seg, Store, View, WriteGuard,
+};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+#[derive(Clone, Debug, Default)]
+pub struct SyncOptions {
+    /// Rebuild the base instead of writing a delta.
+    pub force_full: bool,
+    pub index: IndexOptions,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SyncReport {
+    pub up_to_date: bool,
+    /// Why the base was rebuilt instead of writing a delta.
+    pub full_rebuild: Option<String>,
+    pub added: usize,
+    pub modified: usize,
+    pub removed: usize,
+    pub touched: usize,
+    pub affected_files: usize,
+    pub affected_refs: usize,
+    pub timings: Vec<(&'static str, Duration)>,
+}
+
+impl SyncReport {
+    pub fn total(&self) -> Duration {
+        self.timings.iter().map(|t| t.1).sum()
+    }
+    pub fn summary(&self) -> String {
+        if self.up_to_date {
+            return "index is up to date".into();
+        }
+        let how = match &self.full_rebuild {
+            Some(why) => format!("rebuilt the index ({why})"),
+            None => format!("{} file(s) re-resolved", self.affected_files),
+        };
+        format!(
+            "synced: {} added, {} modified, {} removed, {} touched; {how} in {:.0} ms",
+            self.added,
+            self.modified,
+            self.removed,
+            self.touched,
+            self.total().as_secs_f64() * 1e3
+        )
+    }
+}
+
+struct Phase {
+    t: Instant,
+    timings: Vec<(&'static str, Duration)>,
+}
+
+impl Phase {
+    fn new() -> Phase {
+        Phase { t: Instant::now(), timings: Vec::new() }
+    }
+    fn lap(&mut self, name: &'static str) {
+        let now = Instant::now();
+        self.timings.push((name, now - self.t));
+        self.t = now;
+    }
+}
+
+/// Fraction limits from the design (9.3 step 9).
+const MAX_AFFECTED_REF_PCT: usize = 30;
+const MAX_AFFECTED_FILE_PCT: usize = 20;
+/// Merge when the delta covers this much of the project, or after this many syncs (5.7).
+const MERGE_FILE_PCT: usize = 5;
+const MERGE_AFTER_SYNCS: u32 = 200;
+
+/// Bring the index of `root` up to date.
+pub fn sync(root: &Path, opts: &SyncOptions) -> Result<SyncReport> {
+    let store = Store::at(root);
+    if store.read_manifest()?.is_none() {
+        return Err(CgError::NoIndex(root.to_path_buf()));
+    }
+    let guard = store.write_lock(Duration::from_secs(30))?;
+    store.cleanup_tmp();
+    sync_locked(&store, &guard, root, opts)
+}
+
+fn full_rebuild(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOptions, mut rep: SyncReport, why: String) -> Result<SyncReport> {
+    let r = index_with_guard(store, guard, root, &opts.index)?;
+    rep.full_rebuild = Some(why);
+    rep.timings.extend(r.timings.iter().copied());
+    Ok(rep)
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct DefKey {
+    kind: u8,
+    name: String,
+    qname: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct DefDetail {
+    flags: u16,
+    ret: Option<String>,
+    sig: Option<String>,
+    vis: u8,
+}
+
+fn defs_of(view: &View, f: FileId) -> BTreeMap<DefKey, Vec<DefDetail>> {
+    let mut m: BTreeMap<DefKey, Vec<DefDetail>> = BTreeMap::new();
+    for n in view.nodes_in_file(f) {
+        let n = NodeIdx(n);
+        let node = view.node(n);
+        if !node.kind().is_definition() {
+            continue;
+        }
+        m.entry(DefKey { kind: node.kind() as u8, name: node.name().to_owned(), qname: node.qname().to_owned() })
+            .or_default()
+            .push(DefDetail {
+                flags: view.hot(n).flags,
+                ret: node.return_type().map(str::to_owned),
+                sig: node.signature().map(str::to_owned),
+                vis: node.visibility() as u8,
+            });
+    }
+    m
+}
+
+type ExportSig = Vec<(String, String, String, u8)>;
+
+/// What a file declares as exports (re-exports, aliases, default exports, star exports). Exported
+/// definitions are covered by the definition diff and by dead-target handling.
+fn export_sig(view: &View, f: FileId) -> ExportSig {
+    let mut v: ExportSig = view
+        .exports_of(f)
+        .iter()
+        .map(|e| (view.text_str(e.name).to_owned(), view.text_str(e.from_spec).to_owned(), view.text_str(e.from_name).to_owned(), e.star))
+        .collect();
+    v.sort();
+    v
+}
+
+/// Pair the nodes of a replaced file before and after the edit by identity (kind + qualified
+/// name + occurrence). A pair whose definition details are unchanged keeps its meaning, so
+/// references that resolved to the old node can simply point at the new one.
+fn pair_nodes(old_view: &View, new_view: &View, f: FileId, remap: &mut FxHashMap<u32, u32>) {
+    type Group = Vec<(u32, Option<DefDetail>)>;
+    fn groups(view: &View, f: FileId) -> BTreeMap<(u8, String), Group> {
+        let mut m: BTreeMap<(u8, String), Group> = BTreeMap::new();
+        for n in view.nodes_in_file(f) {
+            let n = NodeIdx(n);
+            let node = view.node(n);
+            let detail = node.kind().is_definition().then(|| DefDetail {
+                flags: view.hot(n).flags,
+                ret: node.return_type().map(str::to_owned),
+                sig: node.signature().map(str::to_owned),
+                vis: node.visibility() as u8,
+            });
+            m.entry((node.kind() as u8, node.qname().to_owned())).or_default().push((n.0, detail));
+        }
+        m
+    }
+    let old = groups(old_view, f);
+    let new = groups(new_view, f);
+    for (k, olds) in &old {
+        let Some(news) = new.get(k) else { continue };
+        if olds.len() != news.len() {
+            continue;
+        }
+        for ((o, od), (n, nd)) in olds.iter().zip(news) {
+            if od == nd {
+                remap.insert(*o, *n);
+            }
+        }
+    }
+}
+
+fn is_import_kind(kind: u8) -> bool {
+    matches!(RefKind::from_wire(kind), Some(RefKind::Edge(EdgeKind::Imports)))
+}
+
+fn is_hierarchy_kind(kind: u8) -> bool {
+    matches!(RefKind::from_wire(kind), Some(RefKind::Edge(EdgeKind::Extends | EdgeKind::Implements)))
+}
+
+/// Hierarchy as a set of id-independent (sub, super) keys.
+fn hierarchy_keys(view: &View, pairs: impl Iterator<Item = (NodeIdx, NodeIdx)>) -> BTreeSet<(String, String)> {
+    pairs.map(|(a, b)| (cg_store::dump::node_key(view, a), cg_store::dump::node_key(view, b))).collect()
+}
+
+pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOptions) -> Result<SyncReport> {
+    let mut rep = SyncReport::default();
+    let mut ph = Phase::new();
+
+    let snap = match store.open_snapshot() {
+        Ok(s) => s,
+        Err(CgError::NoIndex(p)) => return Err(CgError::NoIndex(p)),
+        Err(e) => return full_rebuild(store, guard, root, opts, rep, format!("snapshot unreadable: {e}")),
+    };
+    let manifest = snap.manifest.clone();
+    let base: Arc<Seg> = snap.view.base.clone();
+    if opts.force_full {
+        return full_rebuild(store, guard, root, opts, rep, "requested".into());
+    }
+    if base.meta.engine_version != brand::ENGINE_VERSION {
+        return full_rebuild(store, guard, root, opts, rep, "index built by an older engine".into());
+    }
+
+    let config = ProjectConfig::load(root);
+    let project = ProjectInfo::load(root, &config);
+    if base.meta.config_digest != config.digest() {
+        return full_rebuild(store, guard, root, opts, rep, "project configuration changed".into());
+    }
+    if base.meta.config_digests != project.config_hashes {
+        return full_rebuild(store, guard, root, opts, rep, "a build/config file (tsconfig, package.json, go.mod, Cargo.toml, ...) changed".into());
+    }
+
+    // ---- 1. diff ----
+    let mut sopts = ScanOptions::new(root);
+    sopts.config = config.clone();
+    let scanned = scan(&sopts);
+    ph.lap("scan");
+    let current = diff_view(&snap.view, root, &scanned.files);
+    if current.is_empty() {
+        rep.up_to_date = true;
+        rep.timings = ph.timings;
+        return Ok(rep);
+    }
+    let base_view = View::new(base.clone()).with_root(root.to_path_buf());
+    let d: Diff = diff_view(&base_view, root, &scanned.files);
+    ph.lap("diff");
+    if d.is_empty() {
+        // the tree equals the base again
+        store.clear_delta(guard)?;
+        rep.up_to_date = true;
+        rep.timings = ph.timings;
+        return Ok(rep);
+    }
+    rep.added = d.added.len();
+    rep.modified = d.replaced.len();
+    rep.removed = d.removed.len();
+    rep.touched = d.touched.len();
+    let n_base_files = base.p.files.len();
+    if d.changed() * 100 > n_base_files * MERGE_FILE_PCT.max(1) && n_base_files >= 40 {
+        let why = format!("{} changed files exceed {MERGE_FILE_PCT}% of the project (merge)", d.changed());
+        return full_rebuild(store, guard, root, opts, rep, why);
+    }
+    if manifest.syncs_since_merge >= MERGE_AFTER_SYNCS {
+        return full_rebuild(store, guard, root, opts, rep, format!("{MERGE_AFTER_SYNCS} syncs since the last merge"));
+    }
+
+    // ---- 2. re-extract the changed files ----
+    let mut budget = MemBudget::detect();
+    if let Some(t) = opts.index.threads {
+        budget.threads = t.max(1);
+    }
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(budget.threads)
+        .stack_size(16 << 20)
+        .build()
+        .map_err(|e| CgError::other(format!("thread pool: {e}")))?;
+    let replaced_ids: FxHashMap<&str, FileId> = d.replaced.iter().map(|(f, e)| (e.rel.as_str(), *f)).collect();
+    let mut entries: Vec<_> = d.replaced.iter().map(|x| x.1.clone()).chain(d.added.iter().cloned()).collect();
+    entries.sort_by(|a, b| a.rel.as_bytes().cmp(b.rel.as_bytes()));
+    let mut xcfg = ExtractConfig::new(root);
+    xcfg.threads = budget.threads;
+    xcfg.batch_bytes = budget.extract_batch_bytes();
+    xcfg.overrides = config.extensions.clone();
+    xcfg.low_priority = opts.index.low_priority;
+    xcfg.hooks = hooks_for(&project);
+    let deprio = cg_resolve::index::deprioritize_matcher(root, &config);
+    let mut extracted: Vec<Option<FileBatch>> = (0..entries.len()).map(|_| None).collect();
+    extract_stream(&entries, &xcfg, |i, b| {
+        if let Some(mut b) = b {
+            if deprio.as_ref().map_or(false, |g| g.matched_path_or_any_parents(&entries[i].rel, false).is_ignore()) {
+                b.flags |= fileflags::DEPRIORITIZED;
+            }
+            extracted[i] = Some(b);
+        }
+    });
+    ph.lap("extract");
+
+    let mut batches: Vec<FileBatch> = Vec::new();
+    let mut states: Vec<DeltaState> = Vec::new();
+    let mut ids: Vec<FileId> = Vec::new();
+    let mut removed: Vec<FileId> = d.removed.clone();
+    let mut next_new = n_base_files as u32;
+    for (i, e) in entries.iter().enumerate() {
+        match (extracted[i].take(), replaced_ids.get(e.rel.as_str())) {
+            (Some(b), Some(id)) => {
+                batches.push(b);
+                states.push(DeltaState::Replaced);
+                ids.push(*id);
+            }
+            (Some(b), None) => {
+                batches.push(b);
+                states.push(DeltaState::New);
+                ids.push(FileId(next_new));
+                next_new += 1;
+            }
+            (None, Some(id)) => removed.push(*id), // no longer extractable
+            (None, None) => {}
+        }
+    }
+    removed.sort();
+    removed.dedup();
+    let replaced: Vec<FileId> = ids.iter().zip(&states).filter(|(_, s)| **s == DeltaState::Replaced).map(|(f, _)| *f).collect();
+    let mut dead_nodes: Vec<u32> = Vec::new();
+    for f in replaced.iter().chain(removed.iter()) {
+        let r = &base.p.files[f.idx()];
+        dead_nodes.extend(r.node_start.0..r.node_start.0 + r.node_count);
+    }
+    let c_files: FxHashSet<u32> = replaced.iter().chain(removed.iter()).map(|f| f.0).collect();
+
+    // ---- provisional delta -> resolution engine over the new state ----
+    let bb = base_offsets(&base);
+    let meta = ProjectMeta { config_digest: base.meta.config_digest, frameworks: base.meta.frameworks.clone(), config_digests: base.meta.config_digests.clone() };
+    let draft = pool.install(|| build_draft_at(&batches, Some((&ids, bb)), &meta));
+    drop(batches);
+    let removed_recs: Vec<(FileId, FileRec)> = removed.iter().map(|f| (*f, base.p.files[f.idx()])).collect();
+    let provisional = |draft: &cg_store::Draft, indexes: bool| DeltaParts {
+        draft: draft.duplicate(),
+        states: states.clone(),
+        ids: ids.clone(),
+        removed: removed_recs.clone(),
+        edges_only: Vec::new(),
+        ref_updates: Vec::new(),
+        edges: Vec::new(),
+        emeta: Vec::new(),
+        import_targets: Vec::new(),
+        export_targets: Vec::new(),
+        sites: Vec::new(),
+        site_ranges: Vec::new(),
+        dead_base_nodes: dead_nodes.clone(),
+        total_files: 0,
+        total_nodes: 0,
+        total_edges: 0,
+        base_gen: manifest.base_gen,
+        indexes,
+    };
+    let v1_seg = assemble_delta(&base, provisional(&draft, false));
+    let view1 = base_view.with_delta(Arc::new(v1_seg))?;
+    ph.lap("draft");
+    let mut engine = Engine::build(&view1, &project);
+    ph.lap("tables");
+
+    // ---- 3. affected references ----
+    let n_base_refs = base.p.refs.len() as u32;
+    let n_draft_refs = draft.seg.p.refs.len() as u32;
+    let mut affected: FxHashSet<u32> = FxHashSet::default();
+    for f in ids.iter() {
+        for id in view1.ref_range(*f) {
+            affected.insert(id);
+        }
+    }
+    // definition / export differences of replaced, new and removed files
+    let mut d_names: BTreeSet<String> = BTreeSet::new();
+    let mut export_changed: Vec<FileId> = Vec::new();
+    let mut remap: FxHashMap<u32, u32> = FxHashMap::default();
+    for (i, f) in ids.iter().enumerate() {
+        let old = if states[i] == DeltaState::Replaced { defs_of(&base_view, *f) } else { BTreeMap::new() };
+        let new = defs_of(&view1, *f);
+        for (k, details) in &new {
+            if old.get(k).map_or(true, |od| od != details) && !old.contains_key(k) {
+                d_names.insert(k.name.clone());
+            }
+        }
+        for k in old.keys() {
+            if !new.contains_key(k) {
+                d_names.insert(k.name.clone());
+            }
+        }
+        if states[i] == DeltaState::Replaced {
+            pair_nodes(&base_view, &view1, *f, &mut remap);
+            if export_sig(&base_view, *f) != export_sig(&view1, *f) {
+                export_changed.push(*f);
+            }
+        }
+    }
+    for f in &removed {
+        for k in defs_of(&base_view, *f).keys() {
+            d_names.insert(k.name.clone());
+        }
+        export_changed.push(*f);
+    }
+    let tail_ids: FxHashSet<u32> = d_names.iter().filter_map(|n| base.names.find(n.as_bytes())).map(|s| s.0).collect();
+    let is_dead = {
+        let mut bits = vec![0u64; (base.p.nodes_hot.len() + 63) / 64];
+        for n in &dead_nodes {
+            bits[*n as usize / 64] |= 1u64 << (*n % 64);
+        }
+        move |n: u32| (n as usize / 64) < bits.len() && bits[n as usize / 64] >> (n % 64) & 1 == 1
+    };
+    // consumers (direct importers, through re-exporting barrels) of files whose exports changed
+    let mut consumer_files: FxHashSet<u32> = FxHashSet::default();
+    if !export_changed.is_empty() {
+        let live: Vec<FileId> = view1.files().collect();
+        let mut importers: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
+        for g in &live {
+            let mut srcs: FxHashSet<u32> = FxHashSet::default();
+            for t in &engine.imp_targets[g.idx()] {
+                if let cg_resolve::ImportTarget::File(x) = t {
+                    srcs.insert(x.0);
+                }
+            }
+            for x in &engine.stars[g.idx()] {
+                srcs.insert(x.0);
+            }
+            for e in engine.exports[g.idx()].values() {
+                match e {
+                    cg_resolve::ExportEntry::Re(x, _) | cg_resolve::ExportEntry::Module(x) => {
+                        srcs.insert(x.0);
+                    }
+                    _ => {}
+                }
+            }
+            for x in srcs {
+                importers.entry(x).or_default().push(g.0);
+            }
+        }
+        // removed files are not in `live`: their importers come from the base facts
+        for f in &removed {
+            for g in base_view.files() {
+                if base_view.imports_of(g).iter().any(|i| i.target == *f) || base_view.exports_of(g).iter().any(|x| x.target == *f) {
+                    importers.entry(f.0).or_default().push(g.0);
+                }
+            }
+        }
+        let mut frontier: Vec<u32> = export_changed.iter().map(|f| f.0).collect();
+        let mut seen: FxHashSet<u32> = frontier.iter().copied().collect();
+        while let Some(x) = frontier.pop() {
+            for g in importers.get(&x).into_iter().flatten() {
+                consumer_files.insert(*g);
+                // a barrel passes the change on
+                let base_reexports = |g: u32, x: u32| -> bool {
+                    (g as usize) < base.p.files.len() && {
+                        let ff = base.p.file_facts[g as usize];
+                        base.p.exports[ff.exp_start as usize..(ff.exp_start + ff.exp_count) as usize].iter().any(|e| e.target.0 == x)
+                    }
+                };
+                let reexports = engine.stars[*g as usize].iter().any(|y| y.0 == x)
+                    || engine.exports[*g as usize].values().any(|e| matches!(e, cg_resolve::ExportEntry::Re(y, _) | cg_resolve::ExportEntry::Module(y) if y.0 == x))
+                    || base_reexports(*g, x);
+                if reexports && seen.insert(*g) {
+                    frontier.push(*g);
+                }
+            }
+        }
+    }
+    let all_refs_of_file = |f: u32, affected: &mut FxHashSet<u32>| {
+        let rec = &base.p.files[f as usize];
+        for id in rec.ref_start..rec.ref_start + rec.ref_count {
+            affected.insert(id);
+        }
+    };
+    let mut retarget: FxHashMap<u32, u32> = FxHashMap::default();
+    let debug = std::env::var_os("CGR_SYNC_DEBUG").is_some();
+    let (mut hit_imports, mut hit_tail, mut hit_dead, mut hit_consumer) = (0usize, 0usize, 0usize, 0usize);
+    for (fi, rec) in base.p.files.iter().enumerate() {
+        if c_files.contains(&(fi as u32)) {
+            continue;
+        }
+        if consumer_files.contains(&(fi as u32)) {
+            hit_consumer += 1;
+            all_refs_of_file(fi as u32, &mut affected);
+            continue;
+        }
+        // A file with one affected reference is re-resolved as a whole: references depend on
+        // each other through local bindings and receiver types (`x = f(); x.m()`).
+        let mut file_hit = false;
+        // an import now resolving to another file (or to none) changes what the file binds
+        let facts = base.p.file_facts[fi];
+        for (i, old) in base.p.imports[facts.imp_start as usize..(facts.imp_start + facts.imp_count) as usize].iter().enumerate() {
+            let new_t = match engine.imp_targets[fi].get(i) {
+                Some(cg_resolve::ImportTarget::File(x)) => Some(view1.file(*x).path()),
+                _ => None,
+            };
+            let old_t = old.target.opt().map(|t| base.paths.get(base.p.files[t.idx()].path));
+            if new_t != old_t {
+                file_hit = true;
+                hit_imports += 1;
+                if debug {
+                    eprintln!("sync: import #{i} of {} now {:?} (was {:?})", base.paths.get(rec.path), new_t, old_t);
+                }
+                break;
+            }
+        }
+        if !file_hit {
+            for i in 0..rec.ref_count {
+                let r = &base.p.refs[(rec.ref_start + i) as usize];
+                let by_tail = tail_ids.contains(&r.tail.0);
+                let by_dead = r.status == status::RESOLVED && is_dead(r.target.0) && !remap.contains_key(&r.target.0);
+                if by_tail || by_dead {
+                    file_hit = true;
+                    hit_tail += by_tail as usize;
+                    hit_dead += by_dead as usize;
+                    if debug {
+                        eprintln!("sync: {} hit by {} ref {:?}", base.paths.get(rec.path), if by_tail { "tail" } else { "dead target" }, base.text.get(r.name));
+                    }
+                    break;
+                }
+            }
+        }
+        if file_hit {
+            all_refs_of_file(fi as u32, &mut affected);
+        } else {
+            for i in 0..rec.ref_count {
+                let id = rec.ref_start + i;
+                let r = &base.p.refs[id as usize];
+                if r.status == status::RESOLVED {
+                    if let Some(n) = remap.get(&r.target.0) {
+                        retarget.insert(id, *n);
+                    }
+                }
+            }
+        }
+    }
+    if debug {
+        eprintln!("sync: files hit: imports {hit_imports}, tail {hit_tail}, dead {hit_dead}, consumers {hit_consumer}; remapped nodes {}; d_names {:?}", remap.len(), d_names);
+    }
+    // (the files' own refs of C files are in `affected` already via view1.ref_range)
+
+    // ---- 3b. resolve, widening when imports or the hierarchy change ----
+    let all_files: Vec<FileId> = view1.files().collect();
+    let file_of = |id: u32| -> FileId { view1.hot(view1.reference(id).from).file };
+    let mut outcomes: FxHashMap<u32, Outcome> = FxHashMap::default();
+    {
+        // round 1: imports, supertypes, type references
+        let todo: FxHashSet<u32> = affected.iter().copied().filter(|id| round_of(view1.reference(*id).kind) == Round_::One).collect();
+        if !todo.is_empty() {
+            let mut files: Vec<FileId> = todo.iter().map(|id| file_of(*id)).collect();
+            files.sort();
+            files.dedup();
+            let res = pool.install(|| resolve_refs(&engine, &files, Round_::One, Some(&todo)));
+            for (id, o) in res {
+                outcomes.insert(id, o);
+            }
+        }
+    }
+    // hierarchy from all resolved extends / implements refs
+    let mut pairs: Vec<(NodeIdx, NodeIdx)> = Vec::new();
+    for &f in &all_files {
+        let range = view1.ref_range(f);
+        for (i, r) in view1.refs_of_file(f).iter().enumerate() {
+            if !is_hierarchy_kind(r.kind) {
+                continue;
+            }
+            let id = range.start + i as u32;
+            let (st, tg) = match outcomes.get(&id) {
+                Some(o) => (o.status, o.target),
+                None => (r.status, retarget.get(&id).copied().unwrap_or(r.target.0)),
+            };
+            if st == status::RESOLVED {
+                pairs.push((r.from, NodeIdx(tg)));
+            }
+        }
+    }
+    let old_pairs = {
+        let mut v = Vec::new();
+        for r in base.p.refs.iter() {
+            if is_hierarchy_kind(r.kind) && r.status == status::RESOLVED {
+                v.push((r.from, r.target));
+            }
+        }
+        hierarchy_keys(&base_view, v.into_iter())
+    };
+    let new_pairs = hierarchy_keys(&view1, pairs.iter().copied());
+    let hierarchy_changed = old_pairs != new_pairs;
+    if debug && hierarchy_changed {
+        for p in old_pairs.difference(&new_pairs).take(5) {
+            eprintln!("sync: hierarchy only before: {p:?}");
+        }
+        for p in new_pairs.difference(&old_pairs).take(5) {
+            eprintln!("sync: hierarchy only after: {p:?}");
+        }
+    }
+    engine.set_hierarchy(pairs.into_iter());
+    if hierarchy_changed {
+        for &f in &all_files {
+            let range = view1.ref_range(f);
+            for (i, r) in view1.refs_of_file(f).iter().enumerate() {
+                if round_of(r.kind) == Round_::Two {
+                    affected.insert(range.start + i as u32);
+                }
+            }
+        }
+    }
+    let todo2: FxHashSet<u32> = affected.iter().copied().filter(|id| round_of(view1.reference(*id).kind) == Round_::Two).collect();
+    if !todo2.is_empty() {
+        let mut files: Vec<FileId> = todo2.iter().map(|id| file_of(*id)).collect();
+        files.sort();
+        files.dedup();
+        let res = pool.install(|| resolve_refs(&engine, &files, Round_::Two, Some(&todo2)));
+        for (id, o) in res {
+            outcomes.insert(id, o);
+        }
+    }
+    ph.lap("resolve");
+
+    // ---- thresholds ----
+    let affected_base_files: BTreeSet<u32> = affected.iter().filter(|id| **id < n_base_refs).map(|id| file_of(*id).0).filter(|f| !c_files.contains(f)).collect();
+    rep.affected_refs = affected.len();
+    rep.affected_files = affected_base_files.len() + ids.len();
+    if affected.len() * 100 > (n_base_refs as usize).max(1) * MAX_AFFECTED_REF_PCT && n_base_refs > 2000 {
+        let why = format!("{} of {} references affected", affected.len(), n_base_refs);
+        return full_rebuild(store, guard, root, opts, rep, why);
+    }
+    if rep.affected_files * 100 > n_base_files.max(1) * MAX_AFFECTED_FILE_PCT && n_base_files >= 40 {
+        let why = format!("{} of {} files affected", rep.affected_files, n_base_files);
+        return full_rebuild(store, guard, root, opts, rep, why);
+    }
+
+    // ---- 4. assemble the delta ----
+    // edges-only files: unchanged content, rewritten refs/edges (plus touched files)
+    let mut eo_set: BTreeSet<u32> = affected_base_files.clone();
+    for id in retarget.keys() {
+        let f = base.p.files.partition_point(|r| r.ref_start + r.ref_count <= *id);
+        eo_set.insert(f as u32);
+    }
+    for (f, _) in &d.touched {
+        if !c_files.contains(&f.0) {
+            eo_set.insert(f.0);
+        }
+    }
+    let touched_recs: FxHashMap<u32, &cg_scan::FileEntry> = d.touched.iter().map(|(f, e)| (f.0, e)).collect();
+    let mut eo_start: FxHashMap<u32, u32> = FxHashMap::default();
+    let mut next = n_base_refs + n_draft_refs;
+    for f in &eo_set {
+        eo_start.insert(*f, next);
+        next += base.p.files[*f as usize].ref_count;
+    }
+    let final_ref = |id: u32| -> u32 {
+        if id >= n_base_refs {
+            return id;
+        }
+        let f = base.p.files.partition_point(|r| r.ref_start + r.ref_count <= id);
+        // files with no refs share a ref_start; `partition_point` lands on the file owning `id`
+        let rec = &base.p.files[f];
+        eo_start[&(f as u32)] + (id - rec.ref_start)
+    };
+    let mut emeta: Vec<String> = vec![FNREF_META.to_owned()];
+    let mut emeta_map: FxHashMap<String, u32> = FxHashMap::default();
+    emeta_map.insert(FNREF_META.to_owned(), 0);
+    let mut edges: Vec<EdgeBuild> = Vec::new();
+
+    // draft files: one edge per resolved reference
+    for id in n_base_refs..n_base_refs + n_draft_refs {
+        let o = outcomes.get(&id).copied().unwrap_or(Outcome::PENDING);
+        if let Some(e) = make_edge(&engine, id, &o, 0) {
+            edges.push(e);
+        }
+    }
+    let ref_updates: Vec<RefUpdate> = (n_base_refs..n_base_refs + n_draft_refs).map(|id| update_of(&outcomes.get(&id).copied().unwrap_or(Outcome::PENDING))).collect();
+    let import_targets: Vec<u32> = ids
+        .iter()
+        .flat_map(|f| engine.imp_targets[f.idx()].iter().map(|t| match t {
+            cg_resolve::ImportTarget::File(tf) => tf.0,
+            _ => NONE,
+        }))
+        .collect();
+
+    let export_targets: Vec<u32> = ids
+        .iter()
+        .flat_map(|f| view1.exports_of(*f).iter().map(|ex| engine.export_target(*f, ex)).collect::<Vec<_>>())
+        .collect();
+    let mut edges_only: Vec<EdgesOnlyFile> = Vec::new();
+    for &f in &eo_set {
+        let rec = base.p.files[f as usize];
+        let mut refs: Vec<RefRec> = base.p.refs[rec.ref_start as usize..(rec.ref_start + rec.ref_count) as usize].to_vec();
+        for (i, r) in refs.iter_mut().enumerate() {
+            let id = rec.ref_start + i as u32;
+            if let Some(o) = outcomes.get(&id) {
+                let u = update_of(o);
+                r.status = u.status;
+                r.by = u.by;
+                r.target = NodeIdx(u.target);
+            } else if let Some(n) = retarget.get(&id) {
+                r.target = NodeIdx(*n);
+            }
+        }
+        // out-edges: extraction edges and untouched resolution edges are copied
+        for n in rec.node_start.0..rec.node_start.0 + rec.node_count {
+            for e in base_view.out_edges(NodeIdx(n)) {
+                let keep = match e.class {
+                    outkind::CLASS_EXTRACT => true,
+                    outkind::CLASS_RESOLVE => e.ref_idx.map_or(false, |r| !outcomes.contains_key(&r)),
+                    _ => false,
+                };
+                if !keep {
+                    continue;
+                }
+                let meta = match base_view.edge_meta(e.eid) {
+                    Some(m) => *emeta_map.entry(m.to_owned()).or_insert_with(|| {
+                        emeta.push(m.to_owned());
+                        (emeta.len() - 1) as u32
+                    }),
+                    None => NONE,
+                };
+                let dst = match e.ref_idx.and_then(|r| retarget.get(&r)) {
+                    Some(nt) => *nt,
+                    None => e.dst.0,
+                };
+                edges.push(EdgeBuild {
+                    src: n,
+                    dst,
+                    kind: outkind::pack(e.kind, e.provenance, e.class),
+                    line: e.line.unwrap_or(NONE),
+                    col: e.col.unwrap_or(NONE),
+                    res: e.res,
+                    ref_idx: e.ref_idx.map_or(NONE, |r| final_ref(r)),
+                    meta,
+                    order: 0,
+                });
+            }
+        }
+        for i in 0..rec.ref_count {
+            let id = rec.ref_start + i;
+            if let Some(o) = outcomes.get(&id) {
+                if let Some(mut e) = make_edge(&engine, id, o, 0) {
+                    e.ref_idx = final_ref(id);
+                    edges.push(e);
+                }
+            }
+        }
+        let mut new_rec = rec;
+        if let Some(entry) = touched_recs.get(&f) {
+            new_rec.mtime_ns = entry.mtime_ns;
+            new_rec.size = entry.size as u32;
+        }
+        edges_only.push(EdgesOnlyFile { file: FileId(f), rec: new_rec, refs });
+    }
+
+    // totals for the manifest
+    let dead_count = dead_nodes.len() as u32;
+    let total_nodes = base.p.nodes_hot.len() as u32 - dead_count + draft.seg.p.nodes_hot.len() as u32;
+    let total_files = view1.files().count() as u32;
+    let mut dropped_edges = 0u32;
+    for f in replaced.iter().map(|f| f.0).chain(removed.iter().map(|f| f.0)).chain(eo_set.iter().copied()) {
+        let rec = &base.p.files[f as usize];
+        for n in rec.node_start.0..rec.node_start.0 + rec.node_count {
+            dropped_edges += base.p.out_off[n as usize + 1] - base.p.out_off[n as usize];
+        }
+    }
+    let parts = DeltaParts {
+        draft: draft.duplicate(),
+        states: states.clone(),
+        ids: ids.clone(),
+        removed: removed_recs.clone(),
+        edges_only,
+        ref_updates,
+        edges,
+        emeta,
+        import_targets,
+        export_targets,
+        sites: Vec::new(),
+        site_ranges: Vec::new(),
+        dead_base_nodes: dead_nodes.clone(),
+        total_files,
+        total_nodes,
+        total_edges: 0,
+        base_gen: manifest.base_gen,
+        indexes: true,
+    };
+    let mut delta = assemble_delta(&base, parts);
+    delta.meta.n_edges = base.meta.n_edges - dropped_edges + delta.p.out_dst.len() as u32;
+    ph.lap("assemble");
+    store.publish_delta(&delta, guard)?;
+    ph.lap("write");
+    rep.timings = ph.timings;
+    Ok(rep)
+}
+
+#[allow(dead_code)]
+fn _unused(_: StrId) {}
