@@ -207,9 +207,32 @@ fn is_hierarchy_kind(kind: u8) -> bool {
     matches!(RefKind::from_wire(kind), Some(RefKind::Edge(EdgeKind::Extends | EdgeKind::Implements)))
 }
 
-/// Hierarchy as a set of id-independent (sub, super) keys.
+/// Hierarchy as a set of id- and position-independent (sub, super) keys.
+///
+/// A key is `path#kind@qualified-name` plus the occurrence number among nodes of the same file
+/// that share kind and name, so that inserting a line above a class does not look like a change
+/// of the class hierarchy (which would widen the re-resolution to every reference in the
+/// project), while a renamed class, a moved class or a changed parent still does.
 fn hierarchy_keys(view: &View, pairs: impl Iterator<Item = (NodeIdx, NodeIdx)>) -> BTreeSet<(String, String)> {
-    pairs.map(|(a, b)| (cg_store::dump::node_key(view, a), cg_store::dump::node_key(view, b))).collect()
+    let mut ordinals: FxHashMap<u32, FxHashMap<u32, u32>> = FxHashMap::default();
+    let mut key = |n: NodeIdx| -> String {
+        let node = view.node(n);
+        let file = node.file();
+        let ord = ordinals.entry(file.0).or_insert_with(|| {
+            let mut seen: FxHashMap<(u8, &str), u32> = FxHashMap::default();
+            let mut out: FxHashMap<u32, u32> = FxHashMap::default();
+            for m in view.nodes_in_file(file) {
+                let nm = view.node(NodeIdx(m));
+                let c = seen.entry((nm.kind() as u8, nm.qname())).or_insert(0);
+                out.insert(m, *c);
+                *c += 1;
+            }
+            out
+        });
+        let dead = if view.is_alive(n) { "" } else { "!dead" };
+        format!("{}#{}@{}~{}{dead}", view.file(file).path(), node.kind(), node.qname(), ord.get(&n.0).copied().unwrap_or(0))
+    };
+    pairs.map(|(a, b)| (key(a), key(b))).collect()
 }
 
 pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOptions) -> Result<SyncReport> {

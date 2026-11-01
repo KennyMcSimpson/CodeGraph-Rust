@@ -1,6 +1,9 @@
 //! `cgr`: CLI entry point (design doc 11.1).
 
+mod bench;
 mod cmds;
+#[cfg(feature = "sqlite")]
+mod export;
 mod hook;
 
 use anyhow::Result;
@@ -39,6 +42,9 @@ enum Cmd {
         /// Print per-phase timings and peak memory
         #[arg(long)]
         timings: bool,
+        /// Print a machine-readable report (used by `bench index`)
+        #[arg(long, hide = true)]
+        report_json: bool,
     },
     /// Incrementally update the index from the files that changed
     Sync {
@@ -214,6 +220,15 @@ enum Cmd {
     /// Hidden: there is no daemon in this version
     #[command(hide = true)]
     Daemon,
+    /// Export the graph to a SQLite file for ad-hoc SQL queries
+    Export {
+        /// Output file
+        #[arg(long, value_name = "FILE", required = true)]
+        sqlite: PathBuf,
+        /// Replace the output file if it exists
+        #[arg(long)]
+        force: bool,
+    },
     /// Print version information
     Version {
         #[arg(long)]
@@ -222,12 +237,78 @@ enum Cmd {
     /// Development helpers
     #[command(subcommand)]
     Debug(DebugCmd),
+    /// Development benchmarks (run them through scripts/bench-local.sh)
+    #[command(subcommand)]
+    Bench(BenchCmd),
+}
+
+#[derive(Subcommand)]
+enum BenchCmd {
+    /// Full index: median time, phases and peak memory over several runs
+    Index {
+        path: Option<PathBuf>,
+        #[arg(long, default_value_t = 3)]
+        runs: usize,
+        /// Worker threads for the child processes (default: automatic)
+        #[arg(long)]
+        threads: Option<usize>,
+        /// Run this many explore readers against the previous snapshot while the next index builds
+        #[arg(long, default_value_t = 0)]
+        with_readers: usize,
+        /// Queries for the readers (one per line)
+        #[arg(long)]
+        queries: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Random single-file edits, each followed by a sync (works on a copy of the tree)
+    Sync {
+        path: Option<PathBuf>,
+        #[arg(long, default_value_t = 200)]
+        edits: usize,
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+        /// Edit the tree itself instead of a copy
+        #[arg(long)]
+        in_place: bool,
+        /// Compare the final index with a full rebuild
+        #[arg(long)]
+        verify: bool,
+        /// Print every edit with its sync result
+        #[arg(short, long)]
+        verbose: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// explore latency distribution
+    Explore {
+        path: Option<PathBuf>,
+        /// One query per line (default: generated from symbol names)
+        #[arg(long)]
+        queries: Option<PathBuf>,
+        /// Number of generated queries
+        #[arg(long, default_value_t = 200)]
+        count: usize,
+        #[arg(long, default_value_t = 3)]
+        runs: usize,
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
 enum DebugCmd {
     /// Print edges (except `contains`) as sorted lines
     Dump,
+    /// Compare the index on disk with a fresh full rebuild (exit 1 when they differ)
+    Diff {
+        path: Option<PathBuf>,
+        /// How many differing lines to print
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     /// Print unresolved references
     Unresolved,
 }
@@ -257,7 +338,7 @@ fn run(cli: Cli) -> Result<i32> {
     let base = cli.project;
     match cli.cmd {
         Cmd::Init { path, local_only } => cmds::init(path.or(base), local_only),
-        Cmd::Index { path, force, quiet, timings } => cmds::index(path.or(base), force, quiet, timings),
+        Cmd::Index { path, force, quiet, timings, report_json } => cmds::index(path.or(base), force, quiet, timings, report_json),
         Cmd::Sync { path, quiet } => cmds::sync(path.or(base), quiet),
         Cmd::Status { path, json, strict, verify } => cmds::status(path.or(base), json, strict, verify),
         Cmd::Query { search, kind, limit, json } => cmds::query(base, &search, kind, limit, json),
@@ -283,8 +364,13 @@ fn run(cli: Cli) -> Result<i32> {
             println!("There is no daemon: each agent session runs its own `cgr serve --mcp` process.");
             Ok(0)
         }
+        Cmd::Export { sqlite, force } => cmds::export_sqlite(base, sqlite, force),
         Cmd::Version { verbose } => cmds::version(verbose),
         Cmd::Debug(DebugCmd::Dump) => cmds::debug_dump(base),
         Cmd::Debug(DebugCmd::Unresolved) => cmds::debug_unresolved(base),
+        Cmd::Debug(DebugCmd::Diff { path, limit }) => cmds::debug_diff(path.or(base), limit),
+        Cmd::Bench(BenchCmd::Index { path, runs, threads, with_readers, queries, json }) => bench::index(path.or(base), runs, threads, with_readers, queries, json),
+        Cmd::Bench(BenchCmd::Sync { path, edits, seed, in_place, verify, verbose, json }) => bench::sync(path.or(base), edits, seed, in_place, verify, verbose, json),
+        Cmd::Bench(BenchCmd::Explore { path, queries, count, runs, seed, json }) => bench::explore(path.or(base), queries, count, runs, seed, json),
     }
 }

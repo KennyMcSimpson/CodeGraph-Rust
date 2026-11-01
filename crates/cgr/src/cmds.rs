@@ -44,9 +44,21 @@ pub fn init(path: Option<PathBuf>, local_only: bool) -> Result<i32> {
     Ok(0)
 }
 
-pub fn index(path: Option<PathBuf>, _force: bool, quiet: bool, timings: bool) -> Result<i32> {
+pub fn index(path: Option<PathBuf>, _force: bool, quiet: bool, timings: bool, report_json: bool) -> Result<i32> {
     let root = start_dir(path)?;
     let report = cg_resolve::index_project(&root, &Default::default())?;
+    if report_json {
+        let phases: serde_json::Map<String, serde_json::Value> = report.timings.iter().map(|(k, d)| (k.to_string(), json!(d.as_secs_f64() * 1e3))).collect();
+        println!(
+            "{}",
+            json!({
+                "files": report.files, "nodes": report.nodes, "edges": report.edges, "refs": report.refs, "resolved": report.resolved_refs,
+                "totalMs": report.total().as_secs_f64() * 1e3, "peakRssMb": report.peak_rss_mb, "threads": report.threads,
+                "sourceMb": report.source_bytes / (1 << 20), "segmentMb": report.segment_bytes / (1 << 20), "phasesMs": phases,
+            })
+        );
+        return Ok(0);
+    }
     if !quiet {
         println!(
             "indexed {} files ({} unsupported, {} too large), {} nodes, {} edges, {}/{} references resolved",
@@ -288,6 +300,23 @@ pub fn cycles(path: Option<PathBuf>, json_out: bool) -> Result<i32> {
     Ok(if cycles.is_empty() { 0 } else { 1 })
 }
 
+#[cfg(feature = "sqlite")]
+pub fn export_sqlite(base: Option<PathBuf>, out: PathBuf, force: bool) -> Result<i32> {
+    let proj = open(base)?;
+    let t0 = std::time::Instant::now();
+    let st = crate::export::export_sqlite(&proj, &out, force)?;
+    println!(
+        "exported {} files, {} nodes, {} edges, {} references and {} imports to {} ({:.1} MB, {:.2}s)",
+        st.files, st.nodes, st.edges, st.refs, st.imports, out.display(), st.bytes as f64 / 1048576.0, t0.elapsed().as_secs_f64()
+    );
+    Ok(0)
+}
+
+#[cfg(not(feature = "sqlite"))]
+pub fn export_sqlite(_base: Option<PathBuf>, _out: PathBuf, _force: bool) -> Result<i32> {
+    Err(anyhow!("this build of {} was compiled without the `sqlite` feature", brand::BIN_NAME))
+}
+
 pub fn version(verbose: bool) -> Result<i32> {
     println!("{} {}", brand::BIN_NAME, env!("CARGO_PKG_VERSION"));
     if verbose {
@@ -315,6 +344,37 @@ pub fn debug_unresolved(base: Option<PathBuf>) -> Result<i32> {
         println!("{l}");
     }
     Ok(0)
+}
+
+/// Compare the stored index of the project at `root` with a fresh full rebuild of the same
+/// tree. Returns true when they are identical.
+pub fn debug_diff_inner(root: &Path, limit: usize) -> Result<bool> {
+    use std::collections::BTreeSet;
+    let proj = Project::locate(root).map_err(|e| anyhow!("{e}"))?;
+    let stored: Vec<String> = dump::canonical(&proj.snap.view);
+    let built = cg_resolve::index::build_seg(proj.root(), &Default::default())?;
+    let fresh_view = cg_store::View::new(std::sync::Arc::new(built.seg)).with_root(proj.root().to_path_buf());
+    let fresh: Vec<String> = dump::canonical(&fresh_view);
+    if stored == fresh {
+        println!("identical: {} canonical lines", stored.len());
+        return Ok(true);
+    }
+    let (a, b): (BTreeSet<&String>, BTreeSet<&String>) = (stored.iter().collect(), fresh.iter().collect());
+    println!("DIFFERENT: {} stored lines vs {} rebuilt lines", stored.len(), fresh.len());
+    println!("-- only in the stored index:");
+    for l in a.difference(&b).take(limit) {
+        println!("  {l}");
+    }
+    println!("-- only in the rebuild:");
+    for l in b.difference(&a).take(limit) {
+        println!("  {l}");
+    }
+    Ok(false)
+}
+
+pub fn debug_diff(path: Option<PathBuf>, limit: usize) -> Result<i32> {
+    let start = start_dir(path)?;
+    Ok(if debug_diff_inner(&start, limit)? { 0 } else { 1 })
 }
 
 #[allow(dead_code)]
