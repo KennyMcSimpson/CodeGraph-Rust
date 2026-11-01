@@ -251,6 +251,35 @@ only arrays reached from a recognized router call participate in navigation matc
 route configuration remains outside this cross-file rule. Go interface dispatch includes unambiguous promoted methods;
 method-set inference remains a bounded static approximation.
 
+Engine rule version 7 adds these resolution rules and synthesis passes, all bounded static rules
+that link nothing when a name is ambiguous:
+
+- **Go**: embedded standard-library types take part in interface satisfaction (the `io.Reader`,
+  `*os.File`, `error`, ... method table is ported from upstream) and other outside embeds are
+  opaque; a project embedding the kernel writes without its package binds through the written
+  qualifier; func-field dispatch (`d.refreshf()` reaches the functions put in the field, through one
+  field-to-field copy); protoc `Unimplemented*Server` stubs reach hand-written servers; Gin's
+  `Context.Next` reaches registered middleware.
+- **TS/JS**: calls through `const local = other` and `export const alias = realImpl` reach the
+  real function, as do object-literal members (`api.run()`); conditional / `??` / `||` arms of
+  module-level values (`const-alias`); ES5 constructors with `prototype` methods and
+  `util.inherits` / `Object.create` inheritance; ambient modules declared with `declare module 'x'`
+  in `.d.ts` files; Redux thunk `dispatch` chains and RTK Query generated hooks.
+- **Rust**: generic parameters resolve through their trait bounds (an unbounded parameter no longer
+  matches a project type of the same name); `impl Deref` targets, `type X = Y` aliases and
+  `Mutex` / `RwLock` lock guards are looked through; `self.field` call chains are evaluated.
+- **Python**: factories returning different classes in different branches are typed by the nearest
+  common base; `self.x = self.make()` types a field across methods; pytest fixture parameters (same
+  file or a `conftest.py` above) take the fixture's return type.
+- **Cross-language / JVM**: Spring test requests (MockMvc, WebTestClient, TestRestTemplate,
+  RestAssured) reach routes; Kotlin Multiplatform `expect` reaches each platform's `actual`; a Tauri
+  frontend's `invoke('cmd')` reaches the registered `#[tauri::command]`; React Native
+  `NativeModules.X.m()` reaches the Java / Kotlin module's `@ReactMethod`.
+
+Not covered: MyBatis XML, Angular templates, Vue / Svelte ecosystem stores and routers, React Native
+events and the Fabric / Expo native side, Tauri events, GoFrame, and Python parameter-type flow
+(upstream implements it for Ruby only).
+
 C/C++, C#, PHP, Ruby, Swift and the other upstream language families are outside this version's
 supported extraction set. Vue/Svelte-specific extraction is also outside the current scope.
 

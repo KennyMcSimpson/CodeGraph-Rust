@@ -222,6 +222,27 @@ React Router 支持通过导入和转导出使用其他文件中的导出路由�
 动态路由配置不在此跨文件规则的覆盖范围内。
 Go 接口分派包含无歧义的提升方法；方法集推断仍是有界的静态近似。
 
+引擎规则版本 7 补充了以下解析规则与合成边（均为有界的静态规则，歧义时不连）：
+
+- **Go**：嵌入的标准库类型参与接口判定（`io.Reader`、`*os.File`、`error` 等方法表移植自上游），
+  其他外部嵌入类型按"不透明"处理；按书写的包限定绑定内核丢掉限定的项目内嵌入；
+  func 字段分派（`d.refreshf()` 连到写入该字段的函数，含一层字段间复制）；
+  protoc 生成的 `Unimplemented*Server` 连到手写实现；Gin `Context.Next` 连到注册的中间件。
+- **TS/JS**：`const local = other` 与 `export const alias = realImpl` 的调用转发到真实函数，
+  对象字面量成员（`api.run()`）同样转发；模块级常量的条件 / `??` / `||` 各分支（`const-alias`）；
+  ES5 构造函数及其 `prototype` 方法、`util.inherits` / `Object.create` 继承；
+  `.d.ts` 中 `declare module 'x'` 声明的环境模块；Redux thunk 的 `dispatch` 链与 RTK Query 生成的 hook。
+- **Rust**：泛型参数按 trait 约束解析（无约束的类型参数不再误连同名项目类型）；
+  `impl Deref` 目标类型、`type X = Y` 别名、`Mutex` / `RwLock` 的锁 guard 自动解引用；`self.字段` 调用链求值。
+- **Python**：分支返回不同类的工厂函数按最近公共基类类型化；`self.x = self.make()` 跨方法字段流；
+  pytest fixture 参数（同文件或上级目录 `conftest.py`）取 fixture 的返回类型。
+- **跨语言 / JVM**：Spring 测试请求（MockMvc、WebTestClient、TestRestTemplate、RestAssured）连到路由；
+  Kotlin Multiplatform `expect` 连到各平台 `actual`；Tauri 前端 `invoke('cmd')` 连到已注册的 `#[tauri::command]`；
+  React Native `NativeModules.X.m()` 连到 Java / Kotlin 模块的 `@ReactMethod`。
+
+尚未覆盖：MyBatis XML、Angular 模板、Vue / Svelte 生态的 store 与路由、React Native 事件与 Fabric/Expo 原生侧、
+Tauri 事件、GoFrame，以及 Python 参数类型流（上游仅对 Ruby 实现）。
+
 当前版本暂不支持 C/C++、C#、PHP、Ruby、Swift 等上游语言，也不包含 Vue/Svelte 专用提取逻辑。
 
 ## 命令行参考

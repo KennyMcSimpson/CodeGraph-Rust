@@ -107,6 +107,29 @@ enum StdWrapper {
     Result,
     Option,
     Pointer,
+    /// `Mutex<T>` / `RwLock<T>` (std, tokio, parking_lot): `lock()` gives a guard.
+    Lock,
+    /// A lock's guard: it dereferences to the value, and std's `unwrap` keeps it.
+    Guard,
+}
+
+/// The methods of a lock that hand out a guard.
+fn lock_method(method: &str) -> bool {
+    matches!(
+        method,
+        "lock"
+            | "read"
+            | "write"
+            | "try_lock"
+            | "try_read"
+            | "try_write"
+            | "blocking_lock"
+            | "blocking_read"
+            | "blocking_write"
+            | "lock_owned"
+            | "read_owned"
+            | "write_owned"
+    )
 }
 
 /// A known project type, possibly still inside a standard Rust container.
@@ -131,7 +154,7 @@ impl ValueType {
         if self.wrappers.contains(&StdWrapper::Pointer) && pointer_method(method) {
             return None;
         }
-        self.wrappers.iter().all(|w| *w == StdWrapper::Pointer).then_some(self.node)
+        self.wrappers.iter().all(|w| matches!(w, StdWrapper::Pointer | StdWrapper::Guard)).then_some(self.node)
     }
 }
 
@@ -179,6 +202,52 @@ fn split_call(value: &str) -> Option<(&str, &str)> {
     None
 }
 
+/// The name a binding's initializer hands on (upstream `aliasTargetName`), read from the
+/// declaration's signature: `= realImpl` (a cast allowed), or with `member` the value of that
+/// key in an object literal (`= { run: impl }`, shorthand `= { impl }`).
+fn alias_target_name<'s>(sig: &'s str, member: Option<&str>) -> Option<&'s str> {
+    let init = sig.trim().strip_prefix('=')?.trim().trim_end_matches(';').trim();
+    let is_ident =
+        |s: &str| s.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_' || c == '$') && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$');
+    let Some(key) = member else {
+        let name = init.split_once(" as ").map_or(init, |(a, _)| a).trim();
+        return is_ident(name).then_some(name);
+    };
+    let body = init.strip_prefix('{')?;
+    let (mut depth, mut start) = (0i32, 0usize);
+    let mut entries = Vec::new();
+    for (i, c) in body.char_indices() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' => depth -= 1,
+            '}' if depth == 0 => {
+                entries.push(&body[start..i]);
+                start = body.len();
+                break;
+            }
+            '}' => depth -= 1,
+            ',' if depth == 0 => {
+                entries.push(&body[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    entries.extend((start < body.len()).then(|| &body[start..]));
+    for entry in entries {
+        let entry = entry.trim();
+        match entry.split_once(':') {
+            Some((k, v)) if k.trim().trim_matches(['\'', '"']) == key => {
+                let v = v.trim();
+                return is_ident(v).then_some(v);
+            }
+            None if entry == key && is_ident(entry) => return Some(entry),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Per-file lookup structures, built once per file and reused for all its references.
 pub struct FileCx<'e, 'v> {
     pub e: &'e Engine<'v>,
@@ -208,11 +277,13 @@ pub struct WorkerCx<'e, 'v> {
     cache_bytes: usize,
     field_cache: FxHashMap<NodeIdx, FieldList>,
     field_cache_bytes: usize,
+    /// Rust: the type `Self` / `self` stand for in the call being resolved.
+    self_ty: Option<NodeIdx>,
 }
 
 impl<'e, 'v> WorkerCx<'e, 'v> {
     pub fn new() -> Self {
-        WorkerCx { cache: Vec::new(), cache_bytes: 0, field_cache: FxHashMap::default(), field_cache_bytes: 0 }
+        WorkerCx { cache: Vec::new(), cache_bytes: 0, field_cache: FxHashMap::default(), field_cache_bytes: 0, self_ty: None }
     }
 
     pub fn file_cx(&mut self, e: &'e Engine<'v>, f: FileId) -> Rc<FileCx<'e, 'v>> {
@@ -389,7 +460,13 @@ impl<'e, 'v> FileCx<'e, 'v> {
                 if let Some(list) = self.bindings.get(&(s, name)) {
                     let mut best = None;
                     for b in list {
-                        if b.kind == BindKind::Package as u8 || b.kind == BindKind::MemberFn as u8 || b.kind == BindKind::ReturnType as u8 {
+                        if b.kind == BindKind::Package as u8
+                            || b.kind == BindKind::MemberFn as u8
+                            || b.kind == BindKind::ReturnType as u8
+                            || b.kind == BindKind::Deref as u8
+                            || b.kind == BindKind::Fixture as u8
+                            || b.kind == BindKind::TypeAlias as u8
+                        {
                             continue;
                         }
                         if b.line == 0 || b.line <= line {
@@ -474,6 +551,13 @@ impl<'e, 'v> FileCx<'e, 'v> {
             }
         }
         best.map(|b| b.0)
+    }
+
+    /// The fields type `t` declares in its body in this file, in declaration order.
+    pub(crate) fn declared_fields(&self, t: NodeIdx) -> Vec<&'v BindingRec> {
+        let Some(cs) = self.class_scope_for(t) else { return Vec::new() };
+        let scope = self.scope_base.wrapping_add(cs);
+        self.view.bindings_of(self.file).iter().filter(|b| b.scope.0 == scope && b.kind == BindKind::Field as u8).collect()
     }
 
     /// Binding of a file-level variable called `name` (module singletons such as `app = Flask()`).
@@ -599,10 +683,19 @@ impl<'e, 'v> FileCx<'e, 'v> {
             return self.type_value(wcx, dt, None, depth + 1);
         }
         let init = self.view.text_str(b.init_ctor);
+        if init.is_empty() && b.kind == BindKind::Param as u8 && self.family == LangFamily::Python {
+            return self.fixture_value(wcx, self.view.text_str(b.name), depth + 1);
+        }
         if init.is_empty() || init == "embedded" {
             return None;
         }
         let scope = b.scope.0.wrapping_sub(self.scope_base);
+        if b.kind == BindKind::Alias as u8 {
+            // `const s = service`: what the other name holds
+            if let Some(other) = self.lookup_binding(init, scope, b.line, false).filter(|o| !std::ptr::eq(*o, b)) {
+                return self.binding_value(wcx, other, depth + 1);
+            }
+        }
         // The new variable is not in scope in its own initializer (`let rt = rt()`).
         let shadows = init.split(['.', ':', '(']).next() == Some(self.view.text_str(b.name));
         let line = if shadows { b.line.saturating_sub(1) } else { b.line };
@@ -612,6 +705,16 @@ impl<'e, 'v> FileCx<'e, 'v> {
     fn expression_value(&self, wcx: &mut WorkerCx<'e, 'v>, init: &str, scope: u32, line: u32, depth: u8) -> Option<ValueType> {
         if depth >= 16 {
             return None;
+        }
+        // `A()|B()`: a factory returning different classes in different branches is typed by
+        // the nearest class they all derive from, or not at all
+        if self.family == LangFamily::Python && init.contains('|') {
+            let mut types = Vec::new();
+            for alt in init.split('|') {
+                let v = self.expression_value(wcx, alt, scope, line, depth + 1)?;
+                types.push(v.receiver()?);
+            }
+            return self.common_base(&types).map(ValueType::plain);
         }
         if let Some(inner) = init.strip_suffix('?') {
             let mut value = self.expression_value(wcx, inner, scope, line, depth + 1)?;
@@ -643,6 +746,65 @@ impl<'e, 'v> FileCx<'e, 'v> {
         self.type_value(wcx, init, None, depth + 1)
     }
 
+    /// A pytest fixture's value (upstream `pythonFixtureReturnType`): in a test file or a
+    /// `conftest.py`, a parameter named after a fixture declared in the same file or in a
+    /// `conftest.py` of its directory or above holds what the fixture returns.
+    fn fixture_value(&self, wcx: &mut WorkerCx<'e, 'v>, name: &str, depth: u8) -> Option<ValueType> {
+        if !(self.is_test || self.path.ends_with("conftest.py")) || matches!(name, "self" | "cls") {
+            return None;
+        }
+        let dir = crate::project::parent_dir(self.path);
+        let mut best: Option<(usize, FileId, &'v BindingRec)> = None;
+        for &(f, b) in self.e.fixtures.get(name)?.iter() {
+            let path = self.view.file(f).path();
+            let fdir = crate::project::parent_dir(path);
+            let visible = f == self.file || (path.ends_with("conftest.py") && (fdir.is_empty() || dir == fdir || dir.starts_with(&format!("{fdir}/"))));
+            if !visible {
+                continue;
+            }
+            // the nearest declaration wins: this file, then the deepest conftest
+            let rank = if f == self.file { usize::MAX } else { fdir.len() };
+            match best {
+                Some((r, ..)) if r > rank => {}
+                Some((r, ..)) if r == rank => return None,
+                _ => best = Some((rank, f, b)),
+            }
+        }
+        let (_, f, b) = best?;
+        let cx = wcx.file_cx(self.e, f);
+        let declared = self.view.text_str(b.decl_type);
+        if !declared.is_empty() {
+            return cx.type_value(wcx, declared, None, depth + 1);
+        }
+        cx.expression_value(wcx, self.view.text_str(b.init_ctor), b.scope.0.wrapping_sub(cx.scope_base), u32::MAX, depth + 1)
+    }
+
+    /// The nearest type each of `types` is or derives from.
+    fn common_base(&self, types: &[NodeIdx]) -> Option<NodeIdx> {
+        let first = *types.first()?;
+        let mut chain = vec![first];
+        chain.extend(self.e.ancestors(first));
+        chain.into_iter().find(|c| types.iter().all(|t| t == c || self.e.ancestors(*t).contains(c)))
+    }
+
+    /// The class a scope sits in (`self` / `cls` / `this` there), through enclosing scopes.
+    fn class_at(&self, mut scope: u32) -> Option<NodeIdx> {
+        loop {
+            let s = self.scopes.get(scope as usize)?;
+            if s.kind == ScopeKind::Class as u8 {
+                let start = s.start;
+                return self.view.nodes_in_file(self.file).map(NodeIdx).find(|n| {
+                    let node = self.view.node(*n);
+                    node.kind().is_type()
+                        && pack_pos(node.start_line(), node.start_col()) <= start
+                        && start <= pack_pos(node.end_line(), node.end_col())
+                        && pack_pos(node.start_line(), 0) == pack_pos((start >> 32) as u32, 0)
+                });
+            }
+            scope = self.scope_parent(scope)?;
+        }
+    }
+
     fn std_wrapper(&self, wcx: &mut WorkerCx<'e, 'v>, name: &str) -> Option<StdWrapper> {
         let (prefix, leaf) = name.rsplit_once("::").unwrap_or(("", name));
         if prefix.is_empty() {
@@ -656,6 +818,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
                     }
                     ("std::result" | "core::result" | "std::io", "Result") => Some(StdWrapper::Result),
                     ("std::option" | "core::option", "Option") => Some(StdWrapper::Option),
+                    ("std::sync" | "tokio::sync" | "parking_lot" | "futures::lock" | "async_lock" | "spin", "Mutex" | "RwLock") => Some(StdWrapper::Lock),
                     _ => None,
                 };
             }
@@ -664,11 +827,13 @@ impl<'e, 'v> FileCx<'e, 'v> {
             "Result" => StdWrapper::Result,
             "Option" => StdWrapper::Option,
             "Arc" | "Rc" | "Box" => StdWrapper::Pointer,
+            "Mutex" | "RwLock" => StdWrapper::Lock,
             _ => return None,
         };
         let standard = match prefix {
             "std::result" | "core::result" | "std::io" => wrapper == StdWrapper::Result,
             "std::option" | "core::option" => wrapper == StdWrapper::Option,
+            "std::sync" | "tokio::sync" | "parking_lot" | "futures::lock" if wrapper == StdWrapper::Lock => true,
             "std::sync" | "alloc::sync" => leaf == "Arc",
             "std::rc" | "alloc::rc" => leaf == "Rc",
             "std::boxed" | "alloc::boxed" => leaf == "Box",
@@ -695,9 +860,19 @@ impl<'e, 'v> FileCx<'e, 'v> {
             name = name.strip_prefix("mut ").unwrap_or(name).trim_start();
         }
         if matches!(name, "Self" | "self" | "this") {
-            return receiver.map(ValueType::plain);
+            return receiver.or(wcx.self_ty).map(ValueType::plain);
         }
         if self.family == LangFamily::Rust {
+            if name == "_" {
+                return None; // a type parameter with no bound
+            }
+            // `impl Svc + Send` / `dyn Svc`: the first bound that is a project trait
+            if let Some(bounds) = name.strip_prefix("impl ").or_else(|| name.strip_prefix("dyn ")) {
+                return bounds.split('+').map(str::trim).filter(|b| !b.starts_with('\'')).find_map(|b| match self.lookup_type(wcx, b) {
+                    TypeRes::Node(t) => Some(ValueType::plain(t)),
+                    _ => None,
+                });
+            }
             if let Some(open) = name.find('<') {
                 let base = name[..open].trim();
                 let Some(wrapper) = self.std_wrapper(wcx, base) else {
@@ -727,6 +902,16 @@ impl<'e, 'v> FileCx<'e, 'v> {
         }
         match self.lookup_type(wcx, name) {
             TypeRes::Node(t) => Some(ValueType::plain(t)),
+            _ if self.family == LangFamily::Js => self.es5_constructor(wcx, name).map(ValueType::plain),
+            _ => None,
+        }
+    }
+
+    /// An ES5 constructor function called `name` (one with prototype members): what `new X()`
+    /// makes in code written before classes.
+    fn es5_constructor(&self, wcx: &mut WorkerCx<'e, 'v>, name: &str) -> Option<NodeIdx> {
+        match self.resolve_name(wcx, name, Accept::Callable, 0, u32::MAX, None, false) {
+            NameRes::Found(n, ..) if self.e.proto.contains_key(&n) => Some(n),
             _ => None,
         }
     }
@@ -773,8 +958,17 @@ impl<'e, 'v> FileCx<'e, 'v> {
                     }
                 }
             }
-            let receiver = if let Some(b) = self.lookup_binding(owner, scope, line, false) {
+            let implicit = matches!(owner, "self" | "cls" | "this") && matches!(self.family, LangFamily::Python | LangFamily::Js);
+            let receiver = if let Some(b) = self
+                .lookup_binding(owner, scope, line, false)
+                .filter(|b| !(implicit && self.view.text_str(b.decl_type).is_empty() && self.view.text_str(b.init_ctor).is_empty()))
+            {
                 self.binding_value(wcx, b, depth + 1)
+            } else if implicit {
+                // `self.make()`: a method of the class the code sits in
+                self.class_at(scope).map(ValueType::plain)
+            } else if self.family == LangFamily::Rust && owner.contains('.') && !owner.contains("::") {
+                self.path_value(wcx, owner, scope, line, depth + 1)
             } else {
                 self.type_value(wcx, owner, None, depth + 1)
             };
@@ -788,7 +982,40 @@ impl<'e, 'v> FileCx<'e, 'v> {
         }
     }
 
+    /// The value a field path holds (`self.state`): the declared type of each field in turn,
+    /// standard wrappers kept; a smart pointer or a lock guard is looked through on the way.
+    fn path_value(&self, wcx: &mut WorkerCx<'e, 'v>, path: &str, scope: u32, line: u32, depth: u8) -> Option<ValueType> {
+        if depth >= 16 {
+            return None;
+        }
+        let mut segs = path.split('.');
+        let root = segs.next()?;
+        let b = self.lookup_binding(root, scope, line, false)?;
+        let mut value = self.binding_value(wcx, b, depth + 1)?;
+        for f in segs {
+            let t = value.method_receiver("")?;
+            value = self.field_value(wcx, t, f, depth + 1)?;
+        }
+        Some(value)
+    }
+
+    /// The declared value of field `name` of type `t` (through the hierarchy), wrappers kept.
+    fn field_value(&self, wcx: &mut WorkerCx<'e, 'v>, t: NodeIdx, name: &str, depth: u8) -> Option<ValueType> {
+        for ty in std::iter::once(t).chain(self.e.ancestors(t)) {
+            let cx = wcx.file_cx(self.e, self.view.hot(ty).file);
+            let Some(cs) = cx.class_scope_for(ty) else { continue };
+            if let Some(b) = cx.bindings.get(&(cs, name)).and_then(|l| l.iter().copied().find(|b| b.kind == BindKind::Field as u8)) {
+                return cx.binding_value(wcx, b, depth + 1);
+            }
+        }
+        None
+    }
+
     fn member_return(&self, wcx: &mut WorkerCx<'e, 'v>, mut receiver: ValueType, method: &str, depth: u8) -> Option<ValueType> {
+        // a smart pointer's own methods stay its own; any other call goes through to the value
+        while receiver.wrappers.last() == Some(&StdWrapper::Pointer) && !pointer_method(method) && receiver.wrappers.len() > 1 {
+            receiver.wrappers.pop();
+        }
         if receiver.wrappers.last().is_some_and(|w| matches!(w, StdWrapper::Result | StdWrapper::Option)) {
             return match method {
                 "unwrap" | "expect" | "unwrap_or" | "unwrap_or_else" | "unwrap_or_default" => {
@@ -809,9 +1036,66 @@ impl<'e, 'v> FileCx<'e, 'v> {
                 _ => {}
             }
         }
+        match receiver.wrappers.last() {
+            Some(StdWrapper::Lock) if lock_method(method) => {
+                receiver.wrappers.pop();
+                receiver.wrappers.push(StdWrapper::Guard);
+                return Some(receiver);
+            }
+            Some(StdWrapper::Lock) => return None,
+            // std's `lock()` returns a `LockResult` of the guard
+            Some(StdWrapper::Guard) if matches!(method, "unwrap" | "expect" | "unwrap_or_else") => return Some(receiver),
+            _ => {}
+        }
         receiver.method_receiver(method)?;
-        let m = self.e.find_member(receiver.node, method)?;
-        self.returned_value(wcx, m, Some(receiver.node), depth + 1)
+        let (m, owner) = self.rust_member(wcx, receiver.node, method)?;
+        self.returned_value(wcx, m, Some(owner), depth + 1)
+    }
+
+    /// Member `method` of `t`, else (Rust) of what `t` dereferences to through `impl Deref`,
+    /// a few hops at most: the member and the type that declares it.
+    fn rust_member(&self, wcx: &mut WorkerCx<'e, 'v>, t: NodeIdx, method: &str) -> Option<(NodeIdx, NodeIdx)> {
+        let mut cur = t;
+        for _ in 0..4 {
+            if let Some(m) = self.e.find_member(cur, method) {
+                return Some((m, cur));
+            }
+            if self.family != LangFamily::Rust {
+                return None;
+            }
+            // `type Outcome = plugin::Outcome<Config>` has the members of what it names
+            let next = match self.e.type_aliases.get(&cur) {
+                Some(b) => {
+                    let cx = wcx.file_cx(self.e, self.view.hot(cur).file);
+                    cx.type_value(wcx, self.view.text_str(b.decl_type), None, 0).and_then(|v| v.receiver())
+                }
+                None => self.deref_target(wcx, cur),
+            };
+            cur = next?;
+            if cur == t {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// What Rust type `t` dereferences to (`impl Deref for T { type Target = U; }`), the impl
+    /// found by the type's name and checked to name `t` where it is written.
+    fn deref_target(&self, wcx: &mut WorkerCx<'e, 'v>, t: NodeIdx) -> Option<NodeIdx> {
+        let entries = self.e.derefs.get(self.view.node(t).name())?;
+        let mut found = None;
+        for &(f, b) in entries {
+            let cx = wcx.file_cx(self.e, f);
+            if cx.lookup_type(wcx, self.view.text_str(b.name)) != TypeRes::Node(t) {
+                continue;
+            }
+            let target = cx.type_value(wcx, self.view.text_str(b.decl_type), Some(t), 0)?.receiver()?;
+            if found.is_some_and(|x| x != target) {
+                return None;
+            }
+            found = Some(target);
+        }
+        found
     }
 
     /// Declared type of field `name` of type `t` (through the hierarchy).
@@ -1139,6 +1423,59 @@ impl<'e, 'v> FileCx<'e, 'v> {
         None
     }
 
+    /// `const local = other`: resolve `other` where the alias is declared, through at most a few
+    /// aliases of aliases. A local value that is not a function stays local.
+    #[allow(clippy::too_many_arguments)]
+    fn follow_alias(
+        &self,
+        wcx: &mut WorkerCx<'e, 'v>,
+        mut b: &'v BindingRec,
+        accept: Accept,
+        from: Option<NodeIdx>,
+        allow_global: bool,
+        args: Option<(&CallArgs<'v>, &RefRec)>,
+    ) -> NameRes {
+        for _ in 0..4 {
+            let target = self.view.text_str(b.init_ctor);
+            let scope = b.scope.0.wrapping_sub(self.scope_base);
+            match self.lookup_binding(target, scope, b.line, false) {
+                Some(next) if next.kind == BindKind::Alias as u8 && !std::ptr::eq(next, b) => b = next,
+                Some(next) if next.kind == BindKind::LocalFn as u8 && next.node.0 != NONE => return NameRes::Found(next.node, by::LEXICAL, 95),
+                Some(_) => return NameRes::Local,
+                None => {
+                    return match self.resolve_name_args(wcx, target, accept, scope, b.line, from, allow_global, args) {
+                        NameRes::Found(n, by_, conf) => NameRes::Found(n, by_, conf.min(95)),
+                        other => other,
+                    };
+                }
+            }
+        }
+        NameRes::Local
+    }
+
+    /// The callable a JS constant or variable hands on (upstream `alias-binding`): `export const
+    /// alias = realImpl` for a call of `alias`, `export const api = { run: impl }` for `api.run`.
+    /// Resolved where the binding is declared; nothing when the initializer is anything else or
+    /// names nothing callable.
+    pub(crate) fn forward_alias_node(&self, wcx: &mut WorkerCx<'e, 'v>, n: NodeIdx, member: Option<&str>) -> Option<NodeIdx> {
+        let view = self.view;
+        let node = view.node(n);
+        if !matches!(node.kind(), NodeKind::Constant | NodeKind::Variable | NodeKind::Property) || view.file(node.file()).lang().family() != LangFamily::Js {
+            return None;
+        }
+        let target = alias_target_name(node.signature()?, member)?;
+        if member.is_none() && target == node.name() {
+            return None;
+        }
+        let cx = wcx.file_cx(self.e, node.file());
+        match cx.resolve_name(wcx, target, Accept::Callable, 0, node.start_line(), None, true) {
+            NameRes::Found(m, ..) if m != n && matches!(kind_of(view, m), NodeKind::Function | NodeKind::Method | NodeKind::Class | NodeKind::Component) => {
+                Some(m)
+            }
+            _ => None,
+        }
+    }
+
     /// Resolve a simple name (design doc 6.3 steps 2, 3, 6, 7).
     #[allow(clippy::too_many_arguments)]
     pub fn resolve_name(
@@ -1172,6 +1509,9 @@ impl<'e, 'v> FileCx<'e, 'v> {
         // 2. lexical scope
         if accept != Accept::Type {
             if let Some(b) = self.lookup_binding(name, scope, line, false) {
+                if b.kind == BindKind::Alias as u8 {
+                    return self.follow_alias(wcx, b, accept, from, allow_global, args);
+                }
                 if b.kind == BindKind::LocalFn as u8 && b.node.0 != NONE {
                     return NameRes::Found(b.node, by::LEXICAL, 98);
                 }
@@ -1330,8 +1670,8 @@ impl<'e, 'v> FileCx<'e, 'v> {
                 return Outcome::found(m, by::RECEIVER, conf);
             }
         }
-        match self.e.find_member(t, method) {
-            Some(m) => Outcome::found(m, by::RECEIVER, conf),
+        match self.rust_member(wcx, t, method) {
+            Some((m, _)) => Outcome::found(m, by::RECEIVER, conf),
             None => Outcome::st(status::NO_CANDIDATE),
         }
     }
@@ -1409,9 +1749,18 @@ impl<'e, 'v> FileCx<'e, 'v> {
         }
     }
 
+    fn is_call(r: &RefRec) -> bool {
+        RefKind::from_wire(r.kind) == Some(RefKind::Edge(EdgeKind::Calls))
+    }
+
     fn call_bare(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, name: &str, accept: Accept, args: Option<&CallArgs<'v>>) -> Outcome {
         let scope = self.scope_at(r.line, r.col);
         match self.resolve_name_args(wcx, name, accept, scope, r.line, Some(r.from), true, args.map(|a| (a, r))) {
+            // a call through `export const alias = realImpl` is a call of `realImpl`
+            NameRes::Found(n, b, c) if self.family == LangFamily::Js && Self::is_call(r) => match self.forward_alias_node(wcx, n, None) {
+                Some(m) => Outcome::found(m, b, c.min(90)),
+                None => Outcome::found(n, b, c),
+            },
             NameRes::Found(n, b, c) => Outcome::found(n, b, c),
             NameRes::Local => Outcome::st(status::LOCAL_BINDING),
             NameRes::External | NameRes::Module(_) | NameRes::Pkg(_) => Outcome::st(status::EXTERNAL),
@@ -1441,6 +1790,12 @@ impl<'e, 'v> FileCx<'e, 'v> {
                     None => {
                         if !self.view.text_str(b.decl_type).is_empty() {
                             return Outcome::st(status::NO_CANDIDATE);
+                        }
+                        // `const api = { run: impl }` at the top of this file: `api.run()` runs `impl`
+                        if self.family == LangFamily::Js && path.is_empty() && b.scope.0 == self.scope_base && Self::is_call(r) {
+                            if let Some(m) = self.e.lookup_top_level(self.file, root).and_then(|n| self.forward_alias_node(wcx, n, Some(method))) {
+                                return Outcome::found(m, by::LEXICAL, 90);
+                            }
                         }
                         // An initializer rooted in an explicit external import
                         // does not justify guessing an unrelated project member.
@@ -1486,6 +1841,12 @@ impl<'e, 'v> FileCx<'e, 'v> {
                     let k = kind_of(view, n);
                     if k.is_type() {
                         return self.member_call(wcx, n, path, method, 92, call);
+                    }
+                    // an imported `export const api = { run: impl }`: `api.run()` runs `impl`
+                    if self.family == LangFamily::Js && path.is_empty() && Self::is_call(r) {
+                        if let Some(m) = self.forward_alias_node(wcx, n, Some(method)) {
+                            return Outcome::found(m, by::IMPORT, 90);
+                        }
                     }
                     // an imported module-level variable: the type of its initialiser
                     {
@@ -1590,7 +1951,9 @@ impl<'e, 'v> FileCx<'e, 'v> {
     }
 
     fn call_this(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, kw: &str, fields: &[&str], method: &str, args: Option<&CallArgs<'v>>) -> Outcome {
-        let Some(t) = self.enclosing_type(r.from) else {
+        // in a function given to an ES5 constructor's prototype, `this` is the constructor's object
+        let t = self.enclosing_type(r.from).or_else(|| self.e.proto_owner.get(&r.from).copied().filter(|_| self.family == LangFamily::Js));
+        let Some(t) = t else {
             return if fields.is_empty() { self.fallback_method(method) } else { Outcome::st(status::NO_CANDIDATE) };
         };
         let _ = kw;
@@ -1651,7 +2014,17 @@ impl<'e, 'v> FileCx<'e, 'v> {
 
     pub fn resolve_call_name(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, name: &str) -> Outcome {
         let args = CallArgs::of(self.view, r);
-        self.call_name_with(wcx, r, name, args.as_ref())
+        if self.family != LangFamily::Rust || !name.contains("self") {
+            return self.call_name_with(wcx, r, name, args.as_ref());
+        }
+        // `self.state.lock()`: `self` is the type the calling method belongs to
+        let previous = wcx.self_ty.replace(self.enclosing_type(r.from).unwrap_or(NodeIdx(NONE)));
+        if wcx.self_ty == Some(NodeIdx(NONE)) {
+            wcx.self_ty = None;
+        }
+        let o = self.call_name_with(wcx, r, name, args.as_ref());
+        wcx.self_ty = previous;
+        o
     }
 
     fn call_name_with(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, name: &str, args: Option<&CallArgs<'v>>) -> Outcome {
@@ -1663,7 +2036,10 @@ impl<'e, 'v> FileCx<'e, 'v> {
             Shape::New { class, method } => match self.lookup_type(wcx, class) {
                 TypeRes::Node(t) => self.member_call(wcx, t, &[], method, 90, args.map(|a| (a, r))),
                 TypeRes::External => Outcome::st(status::EXTERNAL),
-                _ => Outcome::st(status::NO_CANDIDATE),
+                _ => match self.es5_constructor(wcx, class).filter(|_| self.family == LangFamily::Js) {
+                    Some(c) => self.member_call(wcx, c, &[], method, 85, args.map(|a| (a, r))),
+                    None => Outcome::st(status::NO_CANDIDATE),
+                },
             },
             Shape::CallResult { inner, method } => self.call_result(wcx, r, inner, method, args),
             Shape::ValueResult { inner, method } => {
@@ -1825,6 +2201,19 @@ impl<'e, 'v> FileCx<'e, 'v> {
     fn resolve_kind(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, name: &str, kind: RefKind) -> Outcome {
         match kind {
             RefKind::Edge(EdgeKind::Imports) => self.resolve_import_ref(name, r),
+            // `util.inherits(Child, Parent)`: an ES5 constructor extends another constructor
+            RefKind::Edge(EdgeKind::Extends) if self.family == LangFamily::Js => {
+                let o = self.resolve_type_ref(wcx, r, name, Accept::Type);
+                if o.status != status::NO_CANDIDATE {
+                    return o;
+                }
+                let c = self.resolve_type_ref(wcx, r, name, Accept::Callable);
+                if c.status == status::RESOLVED && kind_of(self.view, NodeIdx(c.target)) == NodeKind::Function {
+                    c
+                } else {
+                    o
+                }
+            }
             RefKind::Edge(EdgeKind::Extends | EdgeKind::Implements | EdgeKind::TypeOf | EdgeKind::Returns) => self.resolve_type_ref(wcx, r, name, Accept::Type),
             RefKind::Edge(EdgeKind::Instantiates) => {
                 let o = self.resolve_type_ref(wcx, r, name, Accept::Type);
