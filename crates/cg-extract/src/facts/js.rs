@@ -32,6 +32,8 @@ fn walk(cx: &mut Cx, n: Node, scope: u32) {
                 if let Some(name) = n.child_by_field_name("name") {
                     let nm = cx.text(name).to_owned();
                     cx.add_binding(scope, &nm, BindKind::LocalFn, "", "", 0);
+                    let row = cx.row_at(cx.start(n));
+                    cx.facts.bindings.last_mut().unwrap().node_row = row.unwrap_or(NONE);
                 }
             }
             function(cx, n, scope);

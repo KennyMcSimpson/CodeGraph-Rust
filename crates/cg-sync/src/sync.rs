@@ -256,7 +256,7 @@ fn defs_of(view: &View, f: FileId) -> BTreeMap<DefKey, Vec<DefDetail>> {
 
 type ExportSig = Vec<(String, String, String, u8)>;
 
-type ResolverFactSig = BTreeSet<(u8, String, String, String)>;
+type ResolverFactSig = BTreeSet<(u8, String, String, String, String)>;
 
 /// These facts change resolution even when the kernel's declaration identity
 /// stays the same (e.g. `obj.old = function internal` -> `obj.new = ...`).
@@ -264,7 +264,15 @@ fn resolver_fact_sig(view: &View, f: FileId) -> ResolverFactSig {
     view.bindings_of(f)
         .iter()
         .filter(|b| (b.kind == BindKind::MemberFn as u8 || b.kind == BindKind::ReturnType as u8) && b.node.is_some())
-        .map(|b| (b.kind, view.text_str(b.name).to_owned(), view.node(b.node).qname().to_owned(), view.text_str(b.decl_type).to_owned()))
+        .map(|b| {
+            (
+                b.kind,
+                view.text_str(b.name).to_owned(),
+                view.node(b.node).qname().to_owned(),
+                view.text_str(b.decl_type).to_owned(),
+                view.text_str(b.init_ctor).to_owned(),
+            )
+        })
         .collect()
 }
 

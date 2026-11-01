@@ -8,6 +8,7 @@ pub struct Cx<'a> {
     pub src: &'a str,
     pub rows: FileRows<'a>,
     pub facts: Facts,
+    pub parse_timeout: std::time::Duration,
     line_starts: Vec<u32>,
     row_by_start: Option<rustc_hash::FxHashMap<u64, u32>>,
 }
@@ -17,7 +18,7 @@ impl<'a> Cx<'a> {
         let line_starts = text::line_starts(src);
         let end_line = line_starts.len() as u32;
         let facts = Facts::new(pack_pos(end_line + 1, 0));
-        Cx { src, rows, facts, line_starts, row_by_start: None }
+        Cx { src, rows, facts, parse_timeout: std::time::Duration::from_secs(5), line_starts, row_by_start: None }
     }
 
     /// Kernel node row whose span starts exactly at `pos` (packed line / UTF-16 column), skipping

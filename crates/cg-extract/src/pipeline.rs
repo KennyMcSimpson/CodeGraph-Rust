@@ -126,7 +126,7 @@ pub fn file_node_only(rel: &str, line_count: u32) -> EmitOut {
 }
 
 enum KernelOutcome {
-    Ok { emit: EmitOut, facts: Facts, had_error_tree: bool, facts_failed: bool },
+    Ok { emit: EmitOut, facts: Box<Facts>, had_error_tree: bool, facts_failed: bool },
     TooDeep,
     TimedOut,
     Failed(String),
@@ -161,7 +161,7 @@ fn run_kernel(rel: &str, src: &str, lang: Lang, cfg: &ExtractConfig) -> KernelOu
             let mut facts_failed = false;
             let facts = match &tree {
                 Some(t) => {
-                    let r = catch_unwind(AssertUnwindSafe(|| facts::extract(lang, t, src, FileRows::new(&emit))));
+                    let r = catch_unwind(AssertUnwindSafe(|| facts::extract_with_timeout(lang, t, src, FileRows::new(&emit), cfg.parse_timeout)));
                     match r {
                         Ok(f) => f,
                         Err(_) => {
@@ -172,7 +172,7 @@ fn run_kernel(rel: &str, src: &str, lang: Lang, cfg: &ExtractConfig) -> KernelOu
                 }
                 None => Facts::default(),
             };
-            KernelOutcome::Ok { emit, facts, had_error_tree, facts_failed }
+            KernelOutcome::Ok { emit, facts: Box::new(facts), had_error_tree, facts_failed }
         }
     }
 }
@@ -233,7 +233,11 @@ pub fn extract_bytes(rel: &str, bytes: &[u8], mtime_ns: i64, lang_hint: Lang, cf
             if facts_failed {
                 errors.push("panic while building facts".to_owned());
             }
-            (emit, facts)
+            if facts.timed_out {
+                flags |= fileflags::TIMED_OUT;
+                errors.push(format!("supplementary facts parse timed out after {:?}", cfg.parse_timeout));
+            }
+            (emit, *facts)
         }
         KernelOutcome::TooDeep => {
             errors.push("nesting too deep for the walker".to_owned());

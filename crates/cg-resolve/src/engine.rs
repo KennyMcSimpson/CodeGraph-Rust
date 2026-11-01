@@ -46,7 +46,7 @@ pub struct Engine<'v> {
     pub supers: FxHashMap<NodeIdx, SmallVec<[NodeIdx; 3]>>,
     /// JavaScript functions with syntax evidence that they implement an object member.
     pub member_functions: FxHashMap<&'v str, SmallVec<[NodeIdx; 2]>>,
-    pub return_types: FxHashMap<NodeIdx, &'v str>,
+    pub return_types: FxHashMap<NodeIdx, &'v cg_store::BindingRec>,
     pub django_model: Option<NodeIdx>,
     pub n_files: usize,
 }
@@ -112,7 +112,7 @@ impl<'v> Engine<'v> {
                 .iter()
                 .flat_map(|&f| view.bindings_of(f))
                 .filter(|b| b.kind == BindKind::ReturnType as u8 && b.node.is_some())
-                .map(|b| (b.node, view.text_str(b.decl_type)))
+                .map(|b| (b.node, b))
                 .collect(),
             django_model: None,
             n_files,
@@ -466,8 +466,8 @@ impl<'v> Engine<'v> {
         let mut best = None;
         for cand in self.view.by_qname(&q) {
             let cf = self.view.hot(cand).file;
-            // Go: same package; Rust: same crate. Others: unique qualified name.
-            if cf == tfile || (!tpkg.is_none() && self.modules.pkg_of(cf) == tpkg) || self.same_rust_crate(tfile, cf) {
+            // Go: same package; Rust: the owning module or a proved type import.
+            if cf == tfile || (!tpkg.is_none() && self.modules.pkg_of(cf) == tpkg) || self.rust_type_owner(t, cf) {
                 return Some(cand);
             }
             best.get_or_insert(cand);
@@ -475,11 +475,20 @@ impl<'v> Engine<'v> {
         best.filter(|_| tn.qname().contains("::") && self.view.file(tfile).lang().family() == LangFamily::Jvm)
     }
 
-    fn same_rust_crate(&self, a: FileId, b: FileId) -> bool {
-        match (self.modules.rust_module_of(a), self.modules.rust_module_of(b)) {
-            (Some((x, _)), Some((y, _))) => x == y,
-            _ => false,
+    /// Equal unqualified type names in different Rust modules are distinct.
+    /// An out-of-module impl needs an import that identifies this exact type.
+    pub fn rust_type_owner(&self, t: NodeIdx, file: FileId) -> bool {
+        let node = self.view.node(t);
+        match (self.modules.rust_module_of(node.file()), self.modules.rust_module_of(file)) {
+            (Some(a), Some(b)) if a == b => return true,
+            (Some((a, _)), Some((b, _))) if a == b => {}
+            _ => return false,
         }
+        self.view
+            .imports_of(file)
+            .iter()
+            .enumerate()
+            .any(|(i, import)| self.view.text_str(import.local) == node.qname() && self.bind_import(file, i) == Bound::Node(t))
     }
 
     /// Member lookup through the hierarchy.
