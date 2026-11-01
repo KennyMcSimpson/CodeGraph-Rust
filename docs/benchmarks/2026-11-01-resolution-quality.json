@@ -1,0 +1,975 @@
+{
+  "dateUtc": "2026-11-01T11:17:18.318943+00:00",
+  "baselineCommit": "9c610ba3d99e1d18e5e0595b6268af1a0e85a03c",
+  "upstreamCommit": "d2e0389b519be398f9bc616b6f7bea8a7edfbc6a",
+  "comparisonKey": [
+    "sourceStableId",
+    "targetStableId",
+    "kind",
+    "line",
+    "column"
+  ],
+  "nullLocationsPreserved": true,
+  "allEdgesIncluded": true,
+  "upstreamIsSemanticGroundTruth": false,
+  "beforeBinarySha256": "47f134691da3eec3ee60a444d86ce22dc8e0b5dc2a0e8d7f35c447e0dc2de171",
+  "afterBinarySha256": "724d46024a032c626172c4137e9e89181c7d109cbb7fbaa421f52e79e91ea161",
+  "engineVersion": 3,
+  "formatVersion": 2,
+  "newPerformanceBenchmark": false,
+  "checks": {
+    "focusedBefore": 16,
+    "focusedAfter": 35,
+    "focusedTotal": 35,
+    "workspacePassed": 137,
+    "workspaceIgnored": 1,
+    "randomEditSequences": 6,
+    "randomEditsPerSequence": 100,
+    "clippy": "Rust 1.99, -D warnings, passed",
+    "format": "passed",
+    "realRepositorySyncChecks": 24,
+    "independentSql": [
+      {
+        "repo": "express",
+        "sqliteIntersect": 2063,
+        "sourceFiles": 142,
+        "sourceBytesUnchanged": true
+      },
+      {
+        "repo": "gin",
+        "sqliteIntersect": 7678,
+        "sourceFiles": 99,
+        "sourceBytesUnchanged": true
+      },
+      {
+        "repo": "tokio",
+        "sqliteIntersect": 33638,
+        "sourceFiles": 814,
+        "sourceBytesUnchanged": true
+      },
+      {
+        "repo": "django",
+        "sqliteIntersect": 174016,
+        "sourceFiles": 2984,
+        "sourceBytesUnchanged": true
+      }
+    ],
+    "oldEngineAutoRebuild": true,
+    "memberAliasIncrementalMatchesFull": true
+  },
+  "projects": [
+    {
+      "repo": "express",
+      "sourceFiles": 142,
+      "before": {
+        "strictStableIdSite": {
+          "cgr": 2527,
+          "oracle": 2334,
+          "intersection": 1384,
+          "cgrOnly": 1143,
+          "oracleOnly": 950,
+          "precision": 0.5476850019786308,
+          "recall": 0.5929734361610969,
+          "f1": 0.5694301584036205,
+          "jaccard": 0.39804429105550765
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 1550,
+            "oracle": 1280,
+            "intersection": 419,
+            "cgrOnly": 1131,
+            "oracleOnly": 861,
+            "precision": 0.2703225806451613,
+            "recall": 0.32734375,
+            "f1": 0.29611307420494704,
+            "jaccard": 0.17378681045209457
+          },
+          "contains": {
+            "cgr": 724,
+            "oracle": 724,
+            "intersection": 724,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "imports": {
+            "cgr": 142,
+            "oracle": 154,
+            "intersection": 142,
+            "cgrOnly": 0,
+            "oracleOnly": 12,
+            "precision": 1.0,
+            "recall": 0.922077922077922,
+            "f1": 0.9594594594594594,
+            "jaccard": 0.922077922077922
+          },
+          "instantiates": {
+            "cgr": 23,
+            "oracle": 84,
+            "intersection": 23,
+            "cgrOnly": 0,
+            "oracleOnly": 61,
+            "precision": 1.0,
+            "recall": 0.27380952380952384,
+            "f1": 0.4299065420560748,
+            "jaccard": 0.27380952380952384
+          },
+          "references": {
+            "cgr": 88,
+            "oracle": 92,
+            "intersection": 76,
+            "cgrOnly": 12,
+            "oracleOnly": 16,
+            "precision": 0.8636363636363636,
+            "recall": 0.8260869565217391,
+            "f1": 0.8444444444444444,
+            "jaccard": 0.7307692307692307
+          }
+        },
+        "nonRouteNodesCanonical": {
+          "cgr": 866,
+          "oracle": 866,
+          "intersection": 866,
+          "cgrOnly": 0,
+          "oracleOnly": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "jaccard": 1.0
+        }
+      },
+      "after": {
+        "strictStableIdSite": {
+          "cgr": 3499,
+          "oracle": 2334,
+          "intersection": 2063,
+          "cgrOnly": 1436,
+          "oracleOnly": 271,
+          "precision": 0.5895970277222063,
+          "recall": 0.8838903170522708,
+          "f1": 0.707354705983199,
+          "jaccard": 0.5472148541114058
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 2227,
+            "oracle": 1280,
+            "intersection": 1097,
+            "cgrOnly": 1130,
+            "oracleOnly": 183,
+            "precision": 0.49259092950157163,
+            "recall": 0.85703125,
+            "f1": 0.6256059309951526,
+            "jaccard": 0.45518672199170124
+          },
+          "contains": {
+            "cgr": 992,
+            "oracle": 724,
+            "intersection": 724,
+            "cgrOnly": 268,
+            "oracleOnly": 0,
+            "precision": 0.7298387096774194,
+            "recall": 1.0,
+            "f1": 0.8438228438228438,
+            "jaccard": 0.7298387096774194
+          },
+          "imports": {
+            "cgr": 143,
+            "oracle": 154,
+            "intersection": 143,
+            "cgrOnly": 0,
+            "oracleOnly": 11,
+            "precision": 1.0,
+            "recall": 0.9285714285714286,
+            "f1": 0.962962962962963,
+            "jaccard": 0.9285714285714286
+          },
+          "instantiates": {
+            "cgr": 23,
+            "oracle": 84,
+            "intersection": 23,
+            "cgrOnly": 0,
+            "oracleOnly": 61,
+            "precision": 1.0,
+            "recall": 0.27380952380952384,
+            "f1": 0.4299065420560748,
+            "jaccard": 0.27380952380952384
+          },
+          "references": {
+            "cgr": 114,
+            "oracle": 92,
+            "intersection": 76,
+            "cgrOnly": 38,
+            "oracleOnly": 16,
+            "precision": 0.6666666666666666,
+            "recall": 0.8260869565217391,
+            "f1": 0.7378640776699029,
+            "jaccard": 0.5846153846153846
+          }
+        },
+        "nonRouteNodesCanonical": {
+          "cgr": 866,
+          "oracle": 866,
+          "intersection": 866,
+          "cgrOnly": 0,
+          "oracleOnly": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "jaccard": 1.0
+        }
+      },
+      "changes": {
+        "added": 1001,
+        "removed": 29,
+        "addedMatchingOracle": 679,
+        "removedMatchingOracle": 0,
+        "byKind": {
+          "calls": {
+            "added": 694,
+            "removed": 17,
+            "addedMatchingOracle": 678,
+            "removedMatchingOracle": 0
+          },
+          "contains": {
+            "added": 268,
+            "removed": 0,
+            "addedMatchingOracle": 0,
+            "removedMatchingOracle": 0
+          },
+          "imports": {
+            "added": 1,
+            "removed": 0,
+            "addedMatchingOracle": 1,
+            "removedMatchingOracle": 0
+          },
+          "references": {
+            "added": 38,
+            "removed": 12,
+            "addedMatchingOracle": 0,
+            "removedMatchingOracle": 0
+          }
+        }
+      },
+      "corpusCommit": "1c6f1b0fe4000977b9a7b4f34097e4d527dd9824"
+    },
+    {
+      "repo": "gin",
+      "sourceFiles": 99,
+      "before": {
+        "strictStableIdSite": {
+          "cgr": 7921,
+          "oracle": 8073,
+          "intersection": 7626,
+          "cgrOnly": 295,
+          "oracleOnly": 447,
+          "precision": 0.9627572276227749,
+          "recall": 0.944630248978075,
+          "f1": 0.9536076028510693,
+          "jaccard": 0.9113288718929254
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 3450,
+            "oracle": 3807,
+            "intersection": 3430,
+            "cgrOnly": 20,
+            "oracleOnly": 377,
+            "precision": 0.9942028985507246,
+            "recall": 0.9009718938796953,
+            "f1": 0.945294198704699,
+            "jaccard": 0.8962633916906193
+          },
+          "contains": {
+            "cgr": 2731,
+            "oracle": 2767,
+            "intersection": 2731,
+            "cgrOnly": 0,
+            "oracleOnly": 36,
+            "precision": 1.0,
+            "recall": 0.9869895193350199,
+            "f1": 0.9934521644234268,
+            "jaccard": 0.9869895193350199
+          },
+          "extends": {
+            "cgr": 13,
+            "oracle": 11,
+            "intersection": 11,
+            "cgrOnly": 2,
+            "oracleOnly": 0,
+            "precision": 0.8461538461538461,
+            "recall": 1.0,
+            "f1": 0.9166666666666666,
+            "jaccard": 0.8461538461538461
+          },
+          "implements": {
+            "cgr": 81,
+            "oracle": 93,
+            "intersection": 78,
+            "cgrOnly": 3,
+            "oracleOnly": 15,
+            "precision": 0.9629629629629629,
+            "recall": 0.8387096774193549,
+            "f1": 0.896551724137931,
+            "jaccard": 0.8125
+          },
+          "imports": {
+            "cgr": 31,
+            "oracle": 0,
+            "intersection": 0,
+            "cgrOnly": 31,
+            "oracleOnly": 0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "jaccard": 0.0
+          },
+          "instantiates": {
+            "cgr": 833,
+            "oracle": 833,
+            "intersection": 833,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "references": {
+            "cgr": 782,
+            "oracle": 562,
+            "intersection": 543,
+            "cgrOnly": 239,
+            "oracleOnly": 19,
+            "precision": 0.6943734015345269,
+            "recall": 0.9661921708185054,
+            "f1": 0.8080357142857144,
+            "jaccard": 0.6779026217228464
+          }
+        },
+        "nonRouteNodesCanonical": {
+          "cgr": 2436,
+          "oracle": 2436,
+          "intersection": 2436,
+          "cgrOnly": 0,
+          "oracleOnly": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "jaccard": 1.0
+        }
+      },
+      "after": {
+        "strictStableIdSite": {
+          "cgr": 8216,
+          "oracle": 8073,
+          "intersection": 7678,
+          "cgrOnly": 538,
+          "oracleOnly": 395,
+          "precision": 0.9345180136319376,
+          "recall": 0.9510714728106032,
+          "f1": 0.9427220823868868,
+          "jaccard": 0.8916502148414819
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 3494,
+            "oracle": 3807,
+            "intersection": 3482,
+            "cgrOnly": 12,
+            "oracleOnly": 325,
+            "precision": 0.996565540927304,
+            "recall": 0.9146309429997374,
+            "f1": 0.9538419394603479,
+            "jaccard": 0.911757004451427
+          },
+          "contains": {
+            "cgr": 2972,
+            "oracle": 2767,
+            "intersection": 2731,
+            "cgrOnly": 241,
+            "oracleOnly": 36,
+            "precision": 0.9189098250336474,
+            "recall": 0.9869895193350199,
+            "f1": 0.9517337515246559,
+            "jaccard": 0.9079122340425532
+          },
+          "extends": {
+            "cgr": 13,
+            "oracle": 11,
+            "intersection": 11,
+            "cgrOnly": 2,
+            "oracleOnly": 0,
+            "precision": 0.8461538461538461,
+            "recall": 1.0,
+            "f1": 0.9166666666666666,
+            "jaccard": 0.8461538461538461
+          },
+          "implements": {
+            "cgr": 81,
+            "oracle": 93,
+            "intersection": 78,
+            "cgrOnly": 3,
+            "oracleOnly": 15,
+            "precision": 0.9629629629629629,
+            "recall": 0.8387096774193549,
+            "f1": 0.896551724137931,
+            "jaccard": 0.8125
+          },
+          "imports": {
+            "cgr": 31,
+            "oracle": 0,
+            "intersection": 0,
+            "cgrOnly": 31,
+            "oracleOnly": 0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "jaccard": 0.0
+          },
+          "instantiates": {
+            "cgr": 833,
+            "oracle": 833,
+            "intersection": 833,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "references": {
+            "cgr": 792,
+            "oracle": 562,
+            "intersection": 543,
+            "cgrOnly": 249,
+            "oracleOnly": 19,
+            "precision": 0.6856060606060606,
+            "recall": 0.9661921708185054,
+            "f1": 0.8020679468242246,
+            "jaccard": 0.6695437731196054
+          }
+        },
+        "nonRouteNodesCanonical": {
+          "cgr": 2436,
+          "oracle": 2436,
+          "intersection": 2436,
+          "cgrOnly": 0,
+          "oracleOnly": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "jaccard": 1.0
+        }
+      },
+      "changes": {
+        "added": 307,
+        "removed": 12,
+        "addedMatchingOracle": 52,
+        "removedMatchingOracle": 0,
+        "byKind": {
+          "calls": {
+            "added": 52,
+            "removed": 8,
+            "addedMatchingOracle": 52,
+            "removedMatchingOracle": 0
+          },
+          "contains": {
+            "added": 241,
+            "removed": 0,
+            "addedMatchingOracle": 0,
+            "removedMatchingOracle": 0
+          },
+          "references": {
+            "added": 14,
+            "removed": 4,
+            "addedMatchingOracle": 0,
+            "removedMatchingOracle": 0
+          }
+        }
+      },
+      "corpusCommit": "0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646"
+    },
+    {
+      "repo": "tokio",
+      "sourceFiles": 814,
+      "before": {
+        "strictStableIdSite": {
+          "cgr": 36511,
+          "oracle": 39682,
+          "intersection": 31541,
+          "cgrOnly": 4970,
+          "oracleOnly": 8141,
+          "precision": 0.8638766399167375,
+          "recall": 0.7948440098785343,
+          "f1": 0.8279238250232961,
+          "jaccard": 0.7063737346591418
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 9252,
+            "oracle": 15605,
+            "intersection": 8345,
+            "cgrOnly": 907,
+            "oracleOnly": 7260,
+            "precision": 0.9019671422395158,
+            "recall": 0.5347644985581544,
+            "f1": 0.671440640463451,
+            "jaccard": 0.505390019379845
+          },
+          "contains": {
+            "cgr": 17053,
+            "oracle": 17053,
+            "intersection": 17053,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "extends": {
+            "cgr": 2,
+            "oracle": 2,
+            "intersection": 2,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "implements": {
+            "cgr": 127,
+            "oracle": 132,
+            "intersection": 127,
+            "cgrOnly": 0,
+            "oracleOnly": 5,
+            "precision": 1.0,
+            "recall": 0.9621212121212122,
+            "f1": 0.9806949806949807,
+            "jaccard": 0.9621212121212122
+          },
+          "imports": {
+            "cgr": 3067,
+            "oracle": 2326,
+            "intersection": 1808,
+            "cgrOnly": 1259,
+            "oracleOnly": 518,
+            "precision": 0.5895011411803065,
+            "recall": 0.7773000859845228,
+            "f1": 0.6704987947339144,
+            "jaccard": 0.5043235704323571
+          },
+          "instantiates": {
+            "cgr": 945,
+            "oracle": 818,
+            "intersection": 774,
+            "cgrOnly": 171,
+            "oracleOnly": 44,
+            "precision": 0.819047619047619,
+            "recall": 0.9462102689486552,
+            "f1": 0.8780487804878048,
+            "jaccard": 0.782608695652174
+          },
+          "references": {
+            "cgr": 6065,
+            "oracle": 3746,
+            "intersection": 3432,
+            "cgrOnly": 2633,
+            "oracleOnly": 314,
+            "precision": 0.5658697444352844,
+            "recall": 0.9161772557394554,
+            "f1": 0.6996228722862092,
+            "jaccard": 0.538015362909547
+          }
+        },
+        "nonRouteNodesCanonical": {
+          "cgr": 14460,
+          "oracle": 14460,
+          "intersection": 14460,
+          "cgrOnly": 0,
+          "oracleOnly": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "jaccard": 1.0
+        }
+      },
+      "after": {
+        "strictStableIdSite": {
+          "cgr": 38603,
+          "oracle": 39682,
+          "intersection": 33638,
+          "cgrOnly": 4965,
+          "oracleOnly": 6044,
+          "precision": 0.8713830531305857,
+          "recall": 0.8476891285721486,
+          "f1": 0.8593728044963914,
+          "jaccard": 0.7534212825049835
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 11010,
+            "oracle": 15605,
+            "intersection": 10058,
+            "cgrOnly": 952,
+            "oracleOnly": 5547,
+            "precision": 0.9135331516802907,
+            "recall": 0.6445370073694329,
+            "f1": 0.755814390381364,
+            "jaccard": 0.607477199975841
+          },
+          "contains": {
+            "cgr": 17053,
+            "oracle": 17053,
+            "intersection": 17053,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "extends": {
+            "cgr": 2,
+            "oracle": 2,
+            "intersection": 2,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "implements": {
+            "cgr": 132,
+            "oracle": 132,
+            "intersection": 132,
+            "cgrOnly": 0,
+            "oracleOnly": 0,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "jaccard": 1.0
+          },
+          "imports": {
+            "cgr": 3329,
+            "oracle": 2326,
+            "intersection": 2080,
+            "cgrOnly": 1249,
+            "oracleOnly": 246,
+            "precision": 0.6248122559327125,
+            "recall": 0.8942390369733448,
+            "f1": 0.735632183908046,
+            "jaccard": 0.5818181818181818
+          },
+          "instantiates": {
+            "cgr": 945,
+            "oracle": 818,
+            "intersection": 774,
+            "cgrOnly": 171,
+            "oracleOnly": 44,
+            "precision": 0.819047619047619,
+            "recall": 0.9462102689486552,
+            "f1": 0.8780487804878048,
+            "jaccard": 0.782608695652174
+          },
+          "references": {
+            "cgr": 6132,
+            "oracle": 3746,
+            "intersection": 3539,
+            "cgrOnly": 2593,
+            "oracleOnly": 207,
+            "precision": 0.577136333985649,
+            "recall": 0.9447410571276028,
+            "f1": 0.7165418100830127,
+            "jaccard": 0.5582899510963875
+          }
+        },
+        "nonRouteNodesCanonical": {
+          "cgr": 14460,
+          "oracle": 14460,
+          "intersection": 14460,
+          "cgrOnly": 0,
+          "oracleOnly": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "jaccard": 1.0
+        }
+      },
+      "changes": {
+        "added": 2440,
+        "removed": 348,
+        "addedMatchingOracle": 2148,
+        "removedMatchingOracle": 51,
+        "byKind": {
+          "calls": {
+            "added": 2023,
+            "removed": 265,
+            "addedMatchingOracle": 1764,
+            "removedMatchingOracle": 51
+          },
+          "implements": {
+            "added": 5,
+            "removed": 0,
+            "addedMatchingOracle": 5,
+            "removedMatchingOracle": 0
+          },
+          "imports": {
+            "added": 283,
+            "removed": 21,
+            "addedMatchingOracle": 272,
+            "removedMatchingOracle": 0
+          },
+          "references": {
+            "added": 129,
+            "removed": 62,
+            "addedMatchingOracle": 107,
+            "removedMatchingOracle": 0
+          }
+        }
+      },
+      "corpusCommit": "b499257ef62bd631b83a988d371f4330f545670c"
+    },
+    {
+      "repo": "django",
+      "sourceFiles": 2984,
+      "before": {
+        "strictStableIdSite": {
+          "cgr": 185506,
+          "oracle": 194105,
+          "intersection": 173752,
+          "cgrOnly": 11754,
+          "oracleOnly": 20353,
+          "precision": 0.9366381680376915,
+          "recall": 0.8951443806187372,
+          "f1": 0.9154213128702803,
+          "jaccard": 0.8440340232877843
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 48315,
+            "oracle": 56826,
+            "intersection": 43533,
+            "cgrOnly": 4782,
+            "oracleOnly": 13293,
+            "precision": 0.9010245265445513,
+            "recall": 0.7660753880266076,
+            "f1": 0.8280879961194967,
+            "jaccard": 0.7066127775613557
+          },
+          "contains": {
+            "cgr": 59676,
+            "oracle": 58931,
+            "intersection": 58931,
+            "cgrOnly": 745,
+            "oracleOnly": 0,
+            "precision": 0.98751591929754,
+            "recall": 1.0,
+            "f1": 0.9937187518443262,
+            "jaccard": 0.98751591929754
+          },
+          "decorates": {
+            "cgr": 261,
+            "oracle": 536,
+            "intersection": 260,
+            "cgrOnly": 1,
+            "oracleOnly": 276,
+            "precision": 0.9961685823754789,
+            "recall": 0.48507462686567165,
+            "f1": 0.6524466750313677,
+            "jaccard": 0.48417132216014896
+          },
+          "extends": {
+            "cgr": 9384,
+            "oracle": 9359,
+            "intersection": 9283,
+            "cgrOnly": 101,
+            "oracleOnly": 76,
+            "precision": 0.9892369991474851,
+            "recall": 0.9918794743028101,
+            "f1": 0.9905564744171158,
+            "jaccard": 0.9812896405919662
+          },
+          "imports": {
+            "cgr": 19854,
+            "oracle": 24349,
+            "intersection": 19844,
+            "cgrOnly": 10,
+            "oracleOnly": 4505,
+            "precision": 0.9994963231590611,
+            "recall": 0.8149821347899298,
+            "f1": 0.8978576114743342,
+            "jaccard": 0.8146475635288805
+          },
+          "instantiates": {
+            "cgr": 30943,
+            "oracle": 31205,
+            "intersection": 30482,
+            "cgrOnly": 461,
+            "oracleOnly": 723,
+            "precision": 0.9851016384965905,
+            "recall": 0.9768306361160071,
+            "f1": 0.9809487030958358,
+            "jaccard": 0.9626097391524032
+          },
+          "references": {
+            "cgr": 17073,
+            "oracle": 12899,
+            "intersection": 11419,
+            "cgrOnly": 5654,
+            "oracleOnly": 1480,
+            "precision": 0.6688338311954548,
+            "recall": 0.8852624234436778,
+            "f1": 0.7619778459895902,
+            "jaccard": 0.6154799762841588
+          }
+        },
+        "nonRouteNodesCanonical": {
+          "cgr": 61915,
+          "oracle": 61915,
+          "intersection": 61915,
+          "cgrOnly": 0,
+          "oracleOnly": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "jaccard": 1.0
+        }
+      },
+      "after": {
+        "strictStableIdSite": {
+          "cgr": 184981,
+          "oracle": 194105,
+          "intersection": 174016,
+          "cgrOnly": 10965,
+          "oracleOnly": 20089,
+          "precision": 0.9407236418875452,
+          "recall": 0.896504469230571,
+          "f1": 0.918081912811341,
+          "jaccard": 0.8485687813917199
+        },
+        "byKind": {
+          "calls": {
+            "cgr": 48105,
+            "oracle": 56826,
+            "intersection": 43829,
+            "cgrOnly": 4276,
+            "oracleOnly": 12997,
+            "precision": 0.9111111111111111,
+            "recall": 0.7712842712842712,
+            "f1": 0.8353870638800736,
+            "jaccard": 0.7173087623973029
+          },
+          "contains": {
+            "cgr": 59676,
+            "oracle": 58931,
+            "intersection": 58931,
+            "cgrOnly": 745,
+            "oracleOnly": 0,
+            "precision": 0.98751591929754,
+            "recall": 1.0,
+            "f1": 0.9937187518443262,
+            "jaccard": 0.98751591929754
+          },
+          "decorates": {
+            "cgr": 261,
+            "oracle": 536,
+            "intersection": 260,
+            "cgrOnly": 1,
+            "oracleOnly": 276,
+            "precision": 0.9961685823754789,
+            "recall": 0.48507462686567165,
+            "f1": 0.6524466750313677,
+            "jaccard": 0.48417132216014896
+          },
+          "extends": {
+            "cgr": 9384,
+            "oracle": 9359,
+            "intersection": 9283,
+            "cgrOnly": 101,
+            "oracleOnly": 76,
+            "precision": 0.9892369991474851,
+            "recall": 0.9918794743028101,
+            "f1": 0.9905564744171158,
+            "jaccard": 0.9812896405919662
+          },
+          "imports": {
+            "cgr": 19854,
+            "oracle": 24349,
+            "intersection": 19844,
+            "cgrOnly": 10,
+            "oracleOnly": 4505,
+            "precision": 0.9994963231590611,
+            "recall": 0.8149821347899298,
+            "f1": 0.8978576114743342,
+            "jaccard": 0.8146475635288805
+          },
+          "instantiates": {
+            "cgr": 30943,
+            "oracle": 31205,
+            "intersection": 30482,
+            "cgrOnly": 461,
+            "oracleOnly": 723,
+            "precision": 0.9851016384965905,
+            "recall": 0.9768306361160071,
+            "f1": 0.9809487030958358,
+            "jaccard": 0.9626097391524032
+          },
+          "references": {
+            "cgr": 16758,
+            "oracle": 12899,
+            "intersection": 11387,
+            "cgrOnly": 5371,
+            "oracleOnly": 1512,
+            "precision": 0.6794963599474878,
+            "recall": 0.8827816109775951,
+            "f1": 0.7679131402367063,
+            "jaccard": 0.6232621784345922
+          }
+        },
+        "nonRouteNodesCanonical": {
+          "cgr": 61915,
+          "oracle": 61915,
+          "intersection": 61915,
+          "cgrOnly": 0,
+          "oracleOnly": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "jaccard": 1.0
+        }
+      },
+      "changes": {
+        "added": 471,
+        "removed": 996,
+        "addedMatchingOracle": 345,
+        "removedMatchingOracle": 81,
+        "byKind": {
+          "calls": {
+            "added": 387,
+            "removed": 597,
+            "addedMatchingOracle": 345,
+            "removedMatchingOracle": 49
+          },
+          "references": {
+            "added": 84,
+            "removed": 399,
+            "addedMatchingOracle": 0,
+            "removedMatchingOracle": 32
+          }
+        }
+      },
+      "corpusCommit": "a05e16a7230fe33d3f43f4a3aaed103cebb42efc"
+    }
+  ],
+  "runtimeCommit": "34c00243d1f6a7d65908682f1fa494ca9e4b8cf1",
+  "rustCompiler": "rustc 1.94.1 (e408947bf 2026-03-25)",
+  "vendoredKernelBase": "9d3abb843a84d7610bf987bda7a1db4a6fe3eee3"
+}

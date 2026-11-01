@@ -6,6 +6,9 @@ agreement are separate results: a faster engine does not by itself establish equ
 Exact timing samples, graph intersections, definitions, query lists and exclusions are in the
 [machine-readable evidence](benchmarks/2026-11-01-main-retest.json).
 
+The subsequent [resolution-quality investigation and fixes](RESOLUTION-QUALITY.md) report
+new graph comparisons for engine version 3. The timing results below remain tied to `b827b1d`.
+
 ## Revisions and environment
 
 | Component | Pinned version / setting |
