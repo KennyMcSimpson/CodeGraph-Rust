@@ -621,6 +621,64 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
     }
     ph.lap("resolve");
 
+    // ---- synthesised edges: recomputed over the new state, compared with the base ----
+    let synth = cg_resolve::synth::run_all(&engine);
+    let mut synth_by_file: FxHashMap<u32, Vec<usize>> = FxHashMap::default();
+    for (i, e) in synth.edges.iter().enumerate() {
+        synth_by_file.entry(view1.hot(NodeIdx(e.src)).file.0).or_default().push(i);
+    }
+    let mut synth_dirty: BTreeSet<u32> = BTreeSet::new();
+    {
+        // synthesised edges of the base, grouped by the file of their source
+        let mut base_synth: FxHashMap<u32, Vec<(u32, u32, usize)>> = FxHashMap::default(); // file -> (src, dst, eid)
+        for (eid, kb) in base.p.out_kind.iter().enumerate() {
+            if outkind::class(*kb) == outkind::CLASS_SYNTH {
+                let src = base.p.out_off.partition_point(|o| *o as usize <= eid) as u32 - 1;
+                base_synth.entry(base.p.nodes_hot[src as usize].file.0).or_default().push((src, base.p.out_dst[eid], eid));
+            }
+        }
+        let new_key = |e: &EdgeBuild| -> String {
+            format!("{}>{}|{}|{}|{}|{}", cg_store::dump::node_key(&view1, NodeIdx(e.src)), cg_store::dump::node_key(&view1, NodeIdx(e.dst)), e.kind, e.line, e.col, synth.emeta.get(e.meta as usize).map_or("", |m| m.as_str()))
+        };
+        let mut files: BTreeSet<u32> = synth_by_file.keys().copied().collect();
+        files.extend(base_synth.keys().copied());
+        for f in files {
+            if f as usize >= n_base_files || c_files.contains(&f) {
+                continue; // draft file, replaced or removed: their edges are rewritten anyway
+            }
+            let old = base_synth.get(&f).map(|v| v.as_slice()).unwrap_or(&[]);
+            let mut old_keys: Vec<String> = Vec::with_capacity(old.len());
+            let mut dirty = false;
+            for (src, dst, eid) in old {
+                if is_dead(*dst) {
+                    dirty = true;
+                    break;
+                }
+                let kb = base.p.out_kind[*eid];
+                let site = base.p.out_site[*eid];
+                let meta = base_view.edge_meta(*eid as u32).unwrap_or("");
+                old_keys.push(format!(
+                    "{}>{}|{}|{}|{}|{}",
+                    cg_store::dump::node_key(&base_view, NodeIdx(*src)),
+                    cg_store::dump::node_key(&base_view, NodeIdx(*dst)),
+                    outkind::kind(kb) as u8,
+                    site.line,
+                    site.col,
+                    meta
+                ));
+            }
+            if !dirty {
+                let mut new_keys: Vec<String> = synth_by_file.get(&f).map(|v| v.iter().map(|i| new_key(&synth.edges[*i])).collect()).unwrap_or_default();
+                old_keys.sort();
+                new_keys.sort();
+                dirty = old_keys != new_keys;
+            }
+            if dirty {
+                synth_dirty.insert(f);
+            }
+        }
+    }
+
     // ---- thresholds ----
     let affected_base_files: BTreeSet<u32> = affected.iter().filter(|id| **id < n_base_refs).map(|id| file_of(*id).0).filter(|f| !c_files.contains(f)).collect();
     rep.affected_refs = affected.len();
@@ -637,6 +695,7 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
     // ---- 4. assemble the delta ----
     // edges-only files: unchanged content, rewritten refs/edges (plus touched files)
     let mut eo_set: BTreeSet<u32> = affected_base_files.clone();
+    eo_set.extend(synth_dirty.iter().copied());
     for id in retarget.keys() {
         let f = base.p.files.partition_point(|r| r.ref_start + r.ref_count <= *id);
         eo_set.insert(f as u32);
@@ -752,6 +811,23 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
             new_rec.size = entry.size as u32;
         }
         edges_only.push(EdgesOnlyFile { file: FileId(f), rec: new_rec, refs });
+    }
+
+    // synthesised edges: those whose source file is rewritten in this delta
+    let synth_meta_base = emeta.len() as u32;
+    emeta.extend(synth.emeta.iter().cloned());
+    let rewritten: FxHashSet<u32> = ids.iter().map(|f| f.0).chain(eo_set.iter().copied()).collect();
+    for (f, idxs) in &synth_by_file {
+        if !rewritten.contains(f) {
+            continue;
+        }
+        for i in idxs {
+            let mut e = synth.edges[*i];
+            if e.meta != NONE {
+                e.meta += synth_meta_base;
+            }
+            edges.push(e);
+        }
     }
 
     // totals for the manifest

@@ -42,6 +42,14 @@ const FILES: &[(&str, &str)] = &[
     ("rs/src/util.rs", "pub fn go() {\n    inner();\n}\n\nfn inner() {}\n"),
     ("kt/A.kt", "package demo\n\nopen class A {\n    fun hello(): Int = 1\n}\n"),
     ("kt/B.kt", "package demo\n\nclass B : A() {\n    fun use() {\n        hello()\n    }\n}\n"),
+    ("ui/App.tsx", "import { Child } from './Child';\nimport { Other } from './Other';\nexport function App() {\n  return <div><Child /><Other /></div>;\n}\n"),
+    ("ui/Child.tsx", "export function Child() {\n  return <span />;\n}\n"),
+    ("ui/Other.tsx", "export const Other = () => <b />;\n"),
+    ("ui/Comp.jsx", "import React from 'react';\nexport class Comp extends React.Component {\n  handle() {\n    this.setState({ a: 1 });\n  }\n  render() {\n    return null;\n  }\n}\n"),
+    ("bus/bus.ts", "import { EventEmitter } from 'events';\nexport const bus = new EventEmitter();\nexport function fire() {\n  bus.emit('tick');\n}\n"),
+    ("bus/handler.ts", "import { bus } from './bus';\nexport function onTick() {}\nbus.on('tick', onTick);\n"),
+    ("java/com/ex/Square.java", "package com.ex;\n\npublic class Square implements Shape {\n    public double area() { return 4; }\n}\n"),
+    ("go/a/greeter.go", "package a\n\ntype Greeter interface {\n\tGreet() string\n\tName() string\n}\n\ntype En struct{}\n\nfunc (e *En) Greet() string { return \"hi\" }\nfunc (e *En) Name() string { return \"en\" }\n"),
     ("kt/C.kt", "package demo\n\nclass C {\n    fun f() {\n        val b = B()\n        b.hello()\n        b.use()\n    }\n}\n"),
 ];
 
@@ -372,6 +380,38 @@ fn targeted_edits_match_full_rebuild() {
         ("rs undo later", original("rs/src/util.rs")),
         ("kt B stops extending (C calls b.hello)", replace_in("kt/B.kt", " : A()", "")),
         ("kt B extends A again", original("kt/B.kt")),
+        ("jsx: rename Child", replace_in("ui/Child.tsx", "Child", "Kid")),
+        ("jsx: restore Child", original("ui/Child.tsx")),
+        ("jsx: remove Other", delete("ui/Other.tsx")),
+        ("jsx: Other back", original("ui/Other.tsx")),
+        ("jsx: App renders a third component", put("ui/Third.tsx", "export function Third() { return <i />; }\n")),
+        ("jsx: App uses Third", replace_in("ui/App.tsx", "<Other />", "<Other /><Third />")),
+        ("jsx: App uses Third restored", original("ui/App.tsx")),
+        ("jsx: remove Third", delete("ui/Third.tsx")),
+        ("react: comp loses render", replace_in("ui/Comp.jsx", "render()", "paint()")),
+        ("react: comp restored", original("ui/Comp.jsx")),
+        ("react: comp stops being a Component", replace_in("ui/Comp.jsx", " extends React.Component", "")),
+        ("react: comp is a Component again", original("ui/Comp.jsx")),
+        ("emitter: handler registered for another event", replace_in("bus/handler.ts", "'tick'", "'tock'")),
+        ("emitter: handler restored", original("bus/handler.ts")),
+        ("emitter: emitter renamed event", replace_in("bus/bus.ts", "'tick'", "'tock'")),
+        ("emitter: emitter restored", original("bus/bus.ts")),
+        ("emitter: remove handler file", delete("bus/handler.ts")),
+        ("emitter: handler file back", original("bus/handler.ts")),
+        ("emitter: second handler", put("bus/h2.ts", "import { bus } from './bus';\nfunction second() {}\nbus.on('tick', second);\n")),
+        ("emitter: second handler removed", delete("bus/h2.ts")),
+        ("java: remove Square", delete("java/com/ex/Square.java")),
+        ("java: Square back", original("java/com/ex/Square.java")),
+        ("java: Square stops implementing", replace_in("java/com/ex/Square.java", " implements Shape", "")),
+        ("java: Square implements again", original("java/com/ex/Square.java")),
+        ("java: Shape loses area", replace_in("java/com/ex/Shape.java", "double area();", "double volume();")),
+        ("java: Shape restored", original("java/com/ex/Shape.java")),
+        ("go: En loses Name", replace_in("go/a/greeter.go", "func (e *En) Name() string { return \"en\" }\n", "")),
+        ("go: En regains Name", original("go/a/greeter.go")),
+        ("go: second implementer", put("go/a/fr.go", "package a\n\ntype Fr struct{}\n\nfunc (f *Fr) Greet() string { return \"salut\" }\nfunc (f *Fr) Name() string { return \"fr\" }\n")),
+        ("go: second implementer removed", delete("go/a/fr.go")),
+        ("go: interface gains a method", replace_in("go/a/greeter.go", "Name() string\n}", "Name() string\n\tBye() string\n}")),
+        ("go: interface restored", original("go/a/greeter.go")),
         ("kt A.hello gets a return type", replace_in("kt/A.kt", "fun hello(): Int = 1", "fun hello(): String = \"x\"")),
     ];
     let dir = tempfile::tempdir().unwrap();
@@ -438,4 +478,27 @@ fn print_fixture_refs() {
             println!("{l}");
         }
     }
+}
+
+/// The synthesis fixtures must really produce synthesised edges, otherwise the scenarios above
+/// would pass vacuously.
+#[test]
+fn fixture_produces_synthesised_edges() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for (i, (f, c)) in FILES.iter().enumerate() {
+        write(root, f, c, i as u64);
+    }
+    index_project(root, &opts()).unwrap();
+    let dump = canonical_of(root);
+    let synth: Vec<&String> = dump.iter().filter(|l| l.starts_with("E ") && l.contains("class=2")).collect();
+    for l in &synth {
+        println!("{l}");
+    }
+    let has = |needle: &str| synth.iter().any(|l| l.contains(needle));
+    assert!(has("ui/App.tsx"), "jsx render edge missing");
+    assert!(has("bus/"), "event emitter edge missing");
+    assert!(has("Comp"), "react setState/render edge missing");
+    assert!(has("Square") || has("Circle"), "java implementation edge missing");
+    assert!(has("greeter.go"), "go implementation edge missing");
 }
