@@ -77,7 +77,13 @@ pub fn py_type_name(text: &str) -> String {
     }
     if let Some((a, b)) = t.split_once('|') {
         let (a, b) = (a.trim(), b.trim());
-        t = if a == "None" { b } else { a };
+        t = if a == "None" {
+            b
+        } else if b == "None" {
+            a
+        } else {
+            return String::new();
+        };
     }
     let name = simple_type_name(t);
     match name.as_str() {
@@ -196,10 +202,12 @@ fn param_names(cx: &mut Cx, params: Node, sc: u32) {
 }
 
 fn function(cx: &mut Cx, n: Node, scope: u32) {
+    let row = cx.row_at(cx.start(n));
     if cx.facts.scopes[scope as usize].kind != ScopeKind::Class {
         if let Some(name) = n.child_by_field_name("name") {
             let nm = cx.text(name).to_owned();
             cx.add_binding(scope, &nm, BindKind::LocalFn, "", "", 0);
+            cx.facts.bindings.last_mut().unwrap().node_row = row.unwrap_or(NONE);
         }
     }
     let sc = cx.push_scope(ScopeKind::Function, scope, n);
@@ -208,10 +216,77 @@ fn function(cx: &mut Cx, n: Node, scope: u32) {
     }
     if let Some(body) = n.child_by_field_name("body") {
         walk(cx, body, sc);
+        if let (Some(row), Some(name)) = (row, n.child_by_field_name("name")) {
+            let (decl_type, init_ctor) = if let Some(ret) = n.child_by_field_name("return_type") {
+                let raw = cx.text(ret);
+                let ty = py_type_name(raw);
+                (if ty.is_empty() { raw.to_owned() } else { ty }, String::new())
+            } else {
+                inferred_return(cx, n, body).unwrap_or_default()
+            };
+            if !decl_type.is_empty() || !init_ctor.is_empty() {
+                cx.facts.bindings.push(BindingFact {
+                    scope: sc,
+                    name: cx.text(name).to_owned(),
+                    kind: BindKind::ReturnType,
+                    decl_type,
+                    init_ctor,
+                    line: cx.line(n),
+                    node_row: row,
+                });
+            }
+        }
     }
     if let Some(dec) = n.child_by_field_name("decorators") {
         walk(cx, dec, scope);
     }
+}
+
+/// Infer only a uniform, explicit return expression. A final return rules out
+/// implicit None; nested definitions, generators and arbitrary decorators must
+/// not supply evidence for the enclosing function.
+fn inferred_return(cx: &Cx, function: Node, body: Node) -> Option<(String, String)> {
+    if kids(function).any(|n| n.kind() == "async") || function.parent().is_some_and(|p| p.kind() == "decorated_definition") {
+        return None;
+    }
+    if kids(body).filter(|n| n.kind() != "comment").last()?.kind() != "return_statement" {
+        return None;
+    }
+    fn collect(cx: &Cx, n: Node, result: &mut Option<(String, String)>, depth: u8) -> Option<()> {
+        if depth >= 64 {
+            return None;
+        }
+        match n.kind() {
+            "function_definition" | "class_definition" | "lambda" => return Some(()),
+            "yield" => return None,
+            "return_statement" => {
+                let value = n.named_child(0)?;
+                let inferred = match value.kind() {
+                    "call" => {
+                        let callee = value.child_by_field_name("function")?;
+                        if !matches!(callee.kind(), "identifier" | "attribute") || cx.text(callee).len() > 4096 {
+                            return None;
+                        }
+                        (String::new(), format!("{}()", cx.text(callee)))
+                    }
+                    _ => return None,
+                };
+                if result.as_ref().is_some_and(|previous| *previous != inferred) {
+                    return None;
+                }
+                *result = Some(inferred);
+                return Some(());
+            }
+            _ => {}
+        }
+        for child in kids(n) {
+            collect(cx, child, result, depth + 1)?;
+        }
+        Some(())
+    }
+    let mut result = None;
+    collect(cx, body, &mut result, 0)?;
+    result
 }
 
 fn lambda(cx: &mut Cx, n: Node, scope: u32) {

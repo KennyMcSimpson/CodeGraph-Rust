@@ -29,6 +29,10 @@ pub enum Shape<'a> {
         inner: &'a str,
         method: &'a str,
     },
+    ValueResult {
+        inner: &'a str,
+        method: &'a str,
+    },
 }
 
 fn split_segments(name: &str) -> SmallVec<[&str; 6]> {
@@ -63,10 +67,13 @@ pub fn parse_shape(name: &str) -> Shape<'_> {
         }
         return Shape::Bare(rest.trim());
     }
-    if let Some(i) = name.rfind("().") {
-        let inner = name[..i].trim();
-        let method = last_segment(&name[i + 3..]);
-        return if inner == "super" { Shape::Super { method } } else { Shape::CallResult { inner, method } };
+    if let Some((value, method)) = name.rsplit_once('.') {
+        if let Some(inner) = value.strip_suffix("()") {
+            return if inner == "super" { Shape::Super { method } } else { Shape::CallResult { inner, method } };
+        }
+        if value.contains(')') || value.ends_with('?') {
+            return Shape::ValueResult { inner: value, method };
+        }
     }
     if name == "super" {
         return Shape::Bare("super");

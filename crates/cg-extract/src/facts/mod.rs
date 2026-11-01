@@ -108,8 +108,8 @@ pub enum BindKind {
     /// Function assigned to a JavaScript object member, rather than a free function.
     /// This is declaration metadata and must not participate in lexical lookup.
     MemberFn = 5,
-    /// Raw Rust return annotation, keyed by the function's node. This metadata
-    /// preserves generic return types the upstream kernel intentionally reduces.
+    /// Return annotation or a bounded inferred return expression, keyed by the
+    /// function's node. Metadata only; not a lexical binding.
     ReturnType = 6,
 }
 
@@ -118,8 +118,8 @@ pub struct BindingFact {
     pub scope: u32,
     pub name: String,
     pub kind: BindKind,
-    /// Declared type, usually reduced to its head (`Foo<T>` -> `Foo`). Rust Result/Option
-    /// retain their arguments so the resolver does not mistake the container for its value.
+    /// Declared type, usually reduced to its head (`Foo<T>` -> `Foo`). Rust
+    /// retains generic arguments to distinguish containers and pointer targets.
     pub decl_type: String,
     /// Constructor or bounded initializer call path (`Foo::new().build()`), or empty.
     pub init_ctor: String,
@@ -137,6 +137,21 @@ pub struct Facts {
     /// `scopes[0]` is the file scope.
     pub scopes: Vec<ScopeFact>,
     pub bindings: Vec<BindingFact>,
+    /// Precise call paths lost by the compatibility kernel. Applied to matching
+    /// call references before storage; node identities and sites stay unchanged.
+    pub call_names: Vec<CallNameFact>,
+    /// A supplementary parse exhausted its deadline. The pipeline exposes this
+    /// as an incomplete file rather than silently advertising complete facts.
+    pub timed_out: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CallNameFact {
+    pub line: u32,
+    pub col: u32,
+    pub tail: String,
+    pub kernel_name: String,
+    pub name: String,
 }
 
 impl Facts {
@@ -158,7 +173,12 @@ impl Facts {
 
 /// Build the facts for one parsed file. `rows` are the kernel tables of the same parse.
 pub fn extract(lang: Lang, tree: &Tree, src: &str, rows: FileRows<'_>) -> Facts {
+    extract_with_timeout(lang, tree, src, rows, std::time::Duration::from_secs(5))
+}
+
+pub fn extract_with_timeout(lang: Lang, tree: &Tree, src: &str, rows: FileRows<'_>, timeout: std::time::Duration) -> Facts {
     let mut cx = Cx::new(src, rows);
+    cx.parse_timeout = timeout;
     let root = tree.root_node();
     match lang {
         Lang::TypeScript | Lang::Tsx | Lang::JavaScript | Lang::Jsx => js::extract(&mut cx, root),

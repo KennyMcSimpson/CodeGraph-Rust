@@ -105,6 +105,7 @@ pub enum TypeRes {
 enum StdWrapper {
     Result,
     Option,
+    Pointer,
 }
 
 /// A known project type, possibly still inside a standard Rust container.
@@ -120,8 +121,61 @@ impl ValueType {
     }
 
     fn receiver(self) -> Option<NodeIdx> {
+        // The field cache stores one node, so it cannot preserve wrapper
+        // methods such as Arc::clone. Only method_receiver may autoderef.
         self.wrappers.is_empty().then_some(self.node)
     }
+
+    fn method_receiver(&self, method: &str) -> Option<NodeIdx> {
+        if self.wrappers.contains(&StdWrapper::Pointer) && pointer_method(method) {
+            return None;
+        }
+        self.wrappers.iter().all(|w| *w == StdWrapper::Pointer).then_some(self.node)
+    }
+}
+
+fn pointer_method(method: &str) -> bool {
+    matches!(
+        method,
+        "clone"
+            | "clone_from"
+            | "as_ref"
+            | "as_mut"
+            | "deref"
+            | "deref_mut"
+            | "get_mut"
+            | "make_mut"
+            | "into_inner"
+            | "try_unwrap"
+            | "downgrade"
+            | "strong_count"
+            | "weak_count"
+            | "ptr_eq"
+    )
+}
+
+/// Paths here contain no source arguments except bounded constructor paths.
+/// Find the final complete call, allowing earlier calls in its receiver.
+fn split_call(value: &str) -> Option<(&str, &str)> {
+    let (mut depth, mut open) = (0u32, 0usize);
+    for (i, byte) in value.bytes().enumerate() {
+        match byte {
+            b'(' => {
+                if depth == 0 {
+                    open = i;
+                }
+                depth += 1;
+            }
+            b')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 && i + 1 == value.len() {
+                    return Some((&value[..open], &value[open + 1..i]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Per-file lookup structures, built once per file and reused for all its references.
@@ -384,6 +438,12 @@ impl<'e, 'v> FileCx<'e, 'v> {
             if cf == self.file {
                 return Some(cand);
             }
+            if self.family == LangFamily::Rust {
+                if self.e.rust_type_owner(cand, self.file) {
+                    return Some(cand);
+                }
+                continue;
+            }
             // a candidate in the caller's package wins over earlier ones; otherwise the first stays
             if (self.pkg.0 != NONE && self.e.modules.pkg_of(cf) == self.pkg) || best.is_none() {
                 best = Some(cand);
@@ -554,8 +614,22 @@ impl<'e, 'v> FileCx<'e, 'v> {
         }
         if let Some(inner) = init.strip_suffix('?') {
             let mut value = self.expression_value(wcx, inner, scope, line, depth + 1)?;
-            value.wrappers.pop()?;
+            if !matches!(value.wrappers.pop()?, StdWrapper::Result | StdWrapper::Option) {
+                return None;
+            }
             return Some(value);
+        }
+        if self.family == LangFamily::Rust {
+            if let Some((callee, args)) = split_call(init) {
+                if let Some(owner) = callee.strip_suffix("::new") {
+                    if self.std_wrapper(wcx, owner) == Some(StdWrapper::Pointer) {
+                        let mut value = self.expression_value(wcx, args, scope, line, depth + 1)?;
+                        value.wrappers.push(StdWrapper::Pointer);
+                        return Some(value);
+                    }
+                }
+                return self.call_value(wcx, callee, scope, line, depth + 1);
+            }
         }
         if let Some(call) = init.strip_suffix("()") {
             return self.call_value(wcx, call, scope, line, depth + 1);
@@ -570,14 +644,33 @@ impl<'e, 'v> FileCx<'e, 'v> {
 
     fn std_wrapper(&self, wcx: &mut WorkerCx<'e, 'v>, name: &str) -> Option<StdWrapper> {
         let (prefix, leaf) = name.rsplit_once("::").unwrap_or(("", name));
+        if prefix.is_empty() {
+            if let Some(i) = self.visible_import(name, 0) {
+                let imp = &self.imports[i as usize];
+                let spec = self.view.text_str(imp.spec);
+                let imported = self.view.text_str(imp.imported);
+                return match (spec, imported) {
+                    ("std::sync" | "alloc::sync", "Arc") | ("std::rc" | "alloc::rc", "Rc") | ("std::boxed" | "alloc::boxed", "Box") => {
+                        Some(StdWrapper::Pointer)
+                    }
+                    ("std::result" | "core::result" | "std::io", "Result") => Some(StdWrapper::Result),
+                    ("std::option" | "core::option", "Option") => Some(StdWrapper::Option),
+                    _ => None,
+                };
+            }
+        }
         let wrapper = match leaf {
             "Result" => StdWrapper::Result,
             "Option" => StdWrapper::Option,
+            "Arc" | "Rc" | "Box" => StdWrapper::Pointer,
             _ => return None,
         };
         let standard = match prefix {
             "std::result" | "core::result" | "std::io" => wrapper == StdWrapper::Result,
             "std::option" | "core::option" => wrapper == StdWrapper::Option,
+            "std::sync" | "alloc::sync" => leaf == "Arc",
+            "std::rc" | "alloc::rc" => leaf == "Rc",
+            "std::boxed" | "alloc::boxed" => leaf == "Box",
             "" => matches!(self.lookup_type(wcx, name), TypeRes::Builtin),
             "io" if wrapper == StdWrapper::Result => self.visible_import("io", 0).is_some_and(|i| {
                 let imp = &self.imports[i as usize];
@@ -592,8 +685,14 @@ impl<'e, 'v> FileCx<'e, 'v> {
         if depth >= 16 || name.len() > 4096 {
             return None;
         }
-        let name = name.trim();
-        let name = name.strip_prefix("&mut ").or_else(|| name.strip_prefix('&')).unwrap_or(name).trim();
+        let mut name = name.trim();
+        while let Some(rest) = name.strip_prefix('&') {
+            name = rest.trim_start();
+            if name.starts_with('\'') {
+                name = name.split_once(char::is_whitespace)?.1.trim_start();
+            }
+            name = name.strip_prefix("mut ").unwrap_or(name).trim_start();
+        }
         if matches!(name, "Self" | "self" | "this") {
             return receiver.map(ValueType::plain);
         }
@@ -637,8 +736,14 @@ impl<'e, 'v> FileCx<'e, 'v> {
             return Some(ValueType::plain(n));
         }
         let cx = wcx.file_cx(self.e, node.file());
-        let rt = self.e.return_types.get(&n).copied().or_else(|| node.return_type())?;
-        cx.type_value(wcx, rt, receiver, depth + 1)
+        if let Some(b) = self.e.return_types.get(&n) {
+            let rt = self.view.text_str(b.decl_type);
+            if !rt.is_empty() {
+                return cx.type_value(wcx, rt, receiver, depth + 1);
+            }
+            return cx.expression_value(wcx, self.view.text_str(b.init_ctor), b.scope.0.wrapping_sub(cx.scope_base), u32::MAX, depth + 1);
+        }
+        cx.type_value(wcx, node.return_type()?, receiver, depth + 1)
     }
 
     /// Follow declared return types through a bounded chain. Static methods do
@@ -647,12 +752,8 @@ impl<'e, 'v> FileCx<'e, 'v> {
         if depth >= 16 || callee.len() > 4096 {
             return None;
         }
-        if let Some((inner, method)) = callee.rsplit_once("().") {
-            let receiver = self.call_value(wcx, inner, scope, line, depth + 1)?;
-            return self.member_return(wcx, receiver, method, depth + 1);
-        }
         if let Some((inner, method)) = callee.rsplit_once('.') {
-            if inner.ends_with('?') {
+            if inner.ends_with(['?', ')']) {
                 let receiver = self.expression_value(wcx, inner, scope, line, depth + 1)?;
                 return self.member_return(wcx, receiver, method, depth + 1);
             }
@@ -687,7 +788,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
     }
 
     fn member_return(&self, wcx: &mut WorkerCx<'e, 'v>, mut receiver: ValueType, method: &str, depth: u8) -> Option<ValueType> {
-        if !receiver.wrappers.is_empty() {
+        if receiver.wrappers.last().is_some_and(|w| matches!(w, StdWrapper::Result | StdWrapper::Option)) {
             return match method {
                 "unwrap" | "expect" | "unwrap_or" | "unwrap_or_else" | "unwrap_or_default" => {
                     receiver.wrappers.pop();
@@ -697,6 +798,17 @@ impl<'e, 'v> FileCx<'e, 'v> {
                 _ => None,
             };
         }
+        if receiver.wrappers.last() == Some(&StdWrapper::Pointer) {
+            match method {
+                "clone" => return Some(receiver),
+                "as_ref" | "as_mut" | "deref" | "deref_mut" => {
+                    receiver.wrappers.pop();
+                    return Some(receiver);
+                }
+                _ => {}
+            }
+        }
+        receiver.method_receiver(method)?;
         let m = self.e.find_member(receiver.node, method)?;
         self.returned_value(wcx, m, Some(receiver.node), depth + 1)
     }
@@ -1105,7 +1217,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
         if let Some(b) = self.lookup_binding(root, scope, r.line, false) {
             if b.kind != BindKind::LocalFn as u8 {
                 return match self.binding_value(wcx, b, 0) {
-                    Some(t) if t.wrappers.is_empty() => {
+                    Some(t) if t.method_receiver(method).is_some() => {
                         let o = self.member_of(wcx, t.node, path, method, 90);
                         if o.status == status::RESOLVED {
                             o
@@ -1117,6 +1229,15 @@ impl<'e, 'v> FileCx<'e, 'v> {
                     None => {
                         if !self.view.text_str(b.decl_type).is_empty() {
                             return Outcome::st(status::NO_CANDIDATE);
+                        }
+                        // An initializer rooted in an explicit external import
+                        // does not justify guessing an unrelated project member.
+                        let init = self.view.text_str(b.init_ctor);
+                        let head = init.split(['.', ':', '(']).next().unwrap_or("");
+                        if let Some(i) = self.visible_import(head, scope).filter(|_| self.lookup_binding(head, scope, r.line, false).is_none()) {
+                            if self.e.bind_import(self.file, i as usize) == Bound::External {
+                                return Outcome::st(status::EXTERNAL);
+                            }
                         }
                         let o = self.fallback_method(method);
                         if o.status == status::RESOLVED && path.is_empty() {
@@ -1251,8 +1372,8 @@ impl<'e, 'v> FileCx<'e, 'v> {
 
     fn call_result(&self, wcx: &mut WorkerCx<'e, 'v>, r: &RefRec, inner: &str, method: &str) -> Outcome {
         // type produced by calling `inner`
-        let t = match self.call_value(wcx, inner, self.scope_at(r.line, r.col), r.line, 0).and_then(ValueType::receiver) {
-            Some(t) => t,
+        let value = match self.call_value(wcx, inner, self.scope_at(r.line, r.col), r.line, 0) {
+            Some(value) => Some(value),
             None => {
                 // `inner` may be a method of a typed receiver: resolve it as a call first
                 let o = self.resolve_call_name(wcx, r, inner);
@@ -1260,20 +1381,10 @@ impl<'e, 'v> FileCx<'e, 'v> {
                     return Outcome::st(status::NO_CANDIDATE);
                 }
                 let n = NodeIdx(o.target);
-                let node = self.view.node(n);
-                if node.kind().is_type() {
-                    n
-                } else {
-                    let Some(rt) = node.return_type() else { return Outcome::st(status::NO_CANDIDATE) };
-                    let owner = self.view.hot(n).file;
-                    let cx = wcx.file_cx(self.e, owner);
-                    match cx.lookup_type(wcx, rt) {
-                        TypeRes::Node(t) => t,
-                        _ => return Outcome::st(status::NO_CANDIDATE),
-                    }
-                }
+                self.returned_value(wcx, n, self.enclosing_type(n), 0)
             }
         };
+        let Some(t) = value.and_then(|v| v.method_receiver(method)) else { return Outcome::st(status::NO_CANDIDATE) };
         self.member_of(wcx, t, &[], method, 85)
     }
 
@@ -1289,6 +1400,13 @@ impl<'e, 'v> FileCx<'e, 'v> {
                 _ => Outcome::st(status::NO_CANDIDATE),
             },
             Shape::CallResult { inner, method } => self.call_result(wcx, r, inner, method),
+            Shape::ValueResult { inner, method } => {
+                let value = self.expression_value(wcx, inner, self.scope_at(r.line, r.col), r.line, 0);
+                match value.and_then(|v| v.method_receiver(method)) {
+                    Some(t) => self.member_of(wcx, t, &[], method, 85),
+                    None => Outcome::st(status::NO_CANDIDATE),
+                }
+            }
         }
     }
 

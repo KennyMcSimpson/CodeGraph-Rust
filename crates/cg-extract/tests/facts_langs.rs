@@ -161,7 +161,7 @@ impl Server {
     assert_eq!(bind(&f, "self").decl_type, "Self");
     assert_eq!(bind(&f, "other").decl_type, "Other");
     assert_eq!(bind(&f, "t").init_ctor, "T::new()");
-    assert_eq!(bind(&f, "m").decl_type, "HashMap");
+    assert_eq!(bind(&f, "m").decl_type, "HashMap<String, u32>");
     assert_eq!(bind(&f, "s").init_ctor, "Server");
     assert_eq!(bind(&f, "item").kind, BindKind::Local);
     assert_eq!(bind(&f, "x").decl_type, "Foo");

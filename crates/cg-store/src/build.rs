@@ -8,7 +8,7 @@ use crate::part::Part;
 use crate::records::*;
 use crate::seg::{Seg, SegMeta, SegParts};
 use crate::strpool::StrPool;
-use cg_core::{brand, kinds::NodeKind, EdgeKind, FileId, ListId, NodeIdx, Provenance, ScopeId, StrId, NONE};
+use cg_core::{brand, kinds::NodeKind, EdgeKind, FileId, ListId, NodeIdx, Provenance, RefKind, ScopeId, StrId, NONE};
 use cg_extract::FileBatch;
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
@@ -435,10 +435,27 @@ pub fn build_draft_at(batches: &[FileBatch], delta: Option<(&[FileId], BuildBase
         });
 
         // ---- references ----
+        let mut call_names = rustc_hash::FxHashMap::default();
+        for call in &b.facts.call_names {
+            for key in [call.tail.as_str(), call.kernel_name.as_str()] {
+                call_names
+                    .entry((call.line, call.col, key))
+                    .and_modify(|name: &mut Option<&str>| {
+                        if *name != Some(call.name.as_str()) {
+                            *name = None;
+                        }
+                    })
+                    .or_insert(Some(call.name.as_str()));
+            }
+        }
         for r in rows.refs() {
             let from_row = r.from_row().filter(|x| *x < kcount as u32).or_else(|| row_by_id(&mut id_to_row, &rows, r.from_id()?));
             let from = nstart + from_row.unwrap_or(0);
-            let name = r.name();
+            let name = if r.kind() == RefKind::Edge(EdgeKind::Calls) {
+                call_names.get(&(r.line(), r.col(), r.name())).copied().flatten().unwrap_or_else(|| r.name())
+            } else {
+                r.name()
+            };
             let tail_src: &str =
                 if r.kind().edge_kind() == EdgeKind::Imports && import_specs.contains(name) { arena.alloc(format!("module:{name}")) } else { tail_of(name) };
             refs.push(RefRec {

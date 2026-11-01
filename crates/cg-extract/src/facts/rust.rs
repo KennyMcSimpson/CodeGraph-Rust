@@ -8,17 +8,18 @@ pub fn extract(cx: &mut Cx, root: Node) {
     // Conditional item wrappers such as Tokio's cfg_rt! hide `pub use` from
     // tree-sitter. Reparse a position-preserving view with just those wrappers
     // blanked out. Never expand arbitrary macros or change the kernel's nodes.
-    if let Some(tree) = conditional_items(cx.src, root) {
+    if let Some(tree) = conditional_items(cx, root) {
         walk(cx, tree.root_node(), 0);
     } else {
         walk(cx, root, 0);
     }
 }
 
-fn conditional_items(src: &str, root: Node) -> Option<Tree> {
-    use std::time::{Duration, Instant};
+fn conditional_items(cx: &mut Cx, root: Node) -> Option<Tree> {
+    use std::time::Instant;
     use tree_sitter::{ParseOptions, Parser};
 
+    let src = cx.src;
     if src.len() > 1024 * 1024 || !src.contains("cfg_") {
         return None;
     }
@@ -73,10 +74,22 @@ fn conditional_items(src: &str, root: Node) -> Option<Tree> {
     }
     let mut parser = Parser::new();
     parser.set_language(&cg_kernel::hooks::language("rust")?).ok()?;
-    let deadline = Instant::now() + Duration::from_millis(100);
-    let mut cancel = |_: &tree_sitter::ParseState| Instant::now() >= deadline;
+    // Use the configured parsing budget, not a separate 100 ms cutoff which
+    // can silently change imports under normal indexing load.
+    if cx.parse_timeout.is_zero() {
+        cx.facts.timed_out = true;
+        return None;
+    }
+    let deadline = Instant::now() + cx.parse_timeout;
+    let mut expired = false;
+    let mut cancel = |_: &tree_sitter::ParseState| {
+        expired = Instant::now() >= deadline;
+        expired
+    };
     let tree =
-        parser.parse_with_options(&mut |offset, _| masked.get(offset..).unwrap_or_default(), None, Some(ParseOptions::new().progress_callback(&mut cancel)))?;
+        parser.parse_with_options(&mut |offset, _| masked.get(offset..).unwrap_or_default(), None, Some(ParseOptions::new().progress_callback(&mut cancel)));
+    cx.facts.timed_out |= expired;
+    let tree = tree?;
     // Non-item wrappers (cfg_if!, DSLs, malformed syntax) are left opaque.
     (!tree.root_node().has_error()).then_some(tree)
 }
@@ -101,6 +114,37 @@ fn walk(cx: &mut Cx, n: Node, scope: u32) {
             let_decl(cx, n, scope);
             walk_children(cx, n, scope);
         }
+        "call_expression" => {
+            if let Some(f) = n.child_by_field_name("function").filter(|f| f.kind() == "field_expression") {
+                if let Some(field) = f.child_by_field_name("field") {
+                    let name = value_path(cx, f, 0);
+                    if !name.is_empty() {
+                        let pos = cx.start(n);
+                        let mut kernel_name = String::new();
+                        let mut depth = 0u32;
+                        for ch in name.chars() {
+                            if ch == ')' {
+                                depth = depth.saturating_sub(1);
+                            }
+                            if depth == 0 {
+                                kernel_name.push(ch);
+                            }
+                            if ch == '(' {
+                                depth += 1;
+                            }
+                        }
+                        cx.facts.call_names.push(CallNameFact {
+                            line: (pos >> 32) as u32,
+                            col: pos as u32,
+                            tail: cx.text(field).to_owned(),
+                            kernel_name,
+                            name,
+                        });
+                    }
+                }
+            }
+            walk_children(cx, n, scope);
+        }
         "for_expression" => {
             if let Some(p) = n.child_by_field_name("pattern") {
                 bind_pattern(cx, p, scope, BindKind::Local);
@@ -120,14 +164,7 @@ fn walk(cx: &mut Cx, n: Node, scope: u32) {
 fn rust_type_name(cx: &Cx, n: Node) -> String {
     match n.kind() {
         "type_identifier" | "scoped_type_identifier" => cx.text(n).to_owned(),
-        "generic_type" => {
-            let base = n.child_by_field_name("type").map(|c| rust_type_name(cx, c)).unwrap_or_default();
-            if matches!(base.rsplit("::").next(), Some("Result" | "Option")) {
-                cx.text(n).to_owned()
-            } else {
-                base
-            }
-        }
+        "generic_type" => cx.text(n).to_owned(),
         "reference_type" | "pointer_type" => n.child_by_field_name("type").map(|c| rust_type_name(cx, c)).unwrap_or_default(),
         "abstract_type" | "dynamic_type" | "bounded_type" => {
             n.child_by_field_name("trait").or_else(|| n.named_child(0)).map(|c| rust_type_name(cx, c)).unwrap_or_default()
@@ -170,7 +207,22 @@ fn value_path(cx: &Cx, v: Node, depth: u8) -> String {
         "generic_function" => v.child_by_field_name("function").map(|f| value_path(cx, f, depth + 1)).unwrap_or_default(),
         "struct_expression" => v.child_by_field_name("name").map(|n| cx.text(n).to_owned()).unwrap_or_default(),
         "call_expression" => {
-            v.child_by_field_name("function").map(|f| value_path(cx, f, depth + 1)).filter(|p| !p.is_empty()).map(|p| format!("{p}()")).unwrap_or_default()
+            let callee = v.child_by_field_name("function").map(|f| value_path(cx, f, depth + 1)).unwrap_or_default();
+            if callee.is_empty() {
+                return String::new();
+            }
+            if callee.ends_with("::new") {
+                if let Some(args) = v.child_by_field_name("arguments") {
+                    let values: Vec<_> = kids(args).filter(|n| n.is_named() && !matches!(n.kind(), "comment" | "line_comment" | "block_comment")).collect();
+                    if values.len() == 1 {
+                        let inner = value_path(cx, values[0], depth + 1);
+                        if !inner.is_empty() {
+                            return format!("{callee}({inner})");
+                        }
+                    }
+                }
+            }
+            format!("{callee}()")
         }
         "field_expression" => {
             let base = v.child_by_field_name("value").map(|v| value_path(cx, v, depth + 1)).unwrap_or_default();
@@ -247,6 +299,8 @@ fn function(cx: &mut Cx, n: Node, scope: u32) {
         if let Some(name) = n.child_by_field_name("name") {
             let nm = cx.text(name).to_owned();
             cx.add_binding(scope, &nm, BindKind::LocalFn, "", "", 0);
+            let row = cx.row_at(cx.start(n));
+            cx.facts.bindings.last_mut().unwrap().node_row = row.unwrap_or(NONE);
         }
     }
     let sc = cx.push_scope(ScopeKind::Function, scope, n);
