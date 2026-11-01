@@ -38,7 +38,12 @@ format. Besides node and file records, the segment holds:
   provenance, class: extracted / resolved / synthesised / framework);
 * the resolver's *facts* (imports, exports, scopes, bindings, per-file reference ranges and their
   outcomes) so incremental sync can re-resolve without re-parsing unchanged files;
-* search indexes: FSTs for name / lower-cased name / path segments, a trigram index, a BM25 token index.
+* search indexes: FSTs for name / lower-cased name / path segments, a trigram index, a BM25 token
+  index with delta-varint posting lists, document frequencies and persisted global document length.
+
+The current format is version 2. Version-1 segments require `cgr index` after upgrading.
+Large edge sets use an adaptive radix/comparison sorter; duplicate identities keep the original
+class and synthesis-pass precedence.
 
 `.cgr/manifest` names the current base and delta; a new generation is published by writing the
 segment, fsyncing, then switching the manifest (`manifest.prev` is kept). Readers take a shared
@@ -54,7 +59,9 @@ the rest, which may use the hierarchy produced by round 1 — over a frozen *eng
 export closure, per-package indexes). Per reference the strategies run in a fixed order
 (framework, lexical scope, import binding, receiver type, qualified name, same package, global
 name) and the first answer wins; ambiguity produces no edge ("better unresolved than wrong").
-Each outcome records status, strategy and confidence; unresolved references stay queryable
+Full builds write outcomes directly into preallocated, disjoint per-file slots. Optional worker
+caches have byte limits derived from the memory budget, and table construction uses the same
+configured pool as resolution. Each outcome records status, strategy and confidence; unresolved references stay queryable
 (`cgr debug unresolved`). Results do not depend on thread count or scheduling.
 
 Route extraction (Express, Flask, FastAPI, Django, Gin, Spring, Axum, Next.js) adds `route`
@@ -62,11 +69,13 @@ nodes with handler references. Synthesis passes add edges that only exist at run
 interface → implementation, Go structural interfaces, event emitter `emit` → `on` handlers, React
 `setState` → `render`, JSX parent → child component — each tagged with the pass that made it,
 capped per pass so a hub cannot explode, and computed from per-file *sites* persisted in the
-snapshot so the link step needs no source.
+snapshot so the link step needs no source. One shared Aho-Corasick trigger scan selects extract
+hooks. Event keys link in parallel in bounded chunks; incremental non-structural edits reconnect
+changed event keys and changed React/JSX files. Structural changes conservatively run all passes.
 
 ## Incremental sync (`cg-sync`)
 
-`delta = f(base, tree)`: a delta layer never stacks on another delta. A sync scans, compares with
+`delta = f(base, tree)`: a delta layer never stacks on another delta. A sync compares with
 the snapshot (mtime/size first, then content hash), re-extracts the changed files, and works out
 which base references an edit can change:
 
@@ -78,17 +87,30 @@ which base references an edit can change:
   so a line inserted above a class is not a hierarchy change);
 * files whose synthesised edges changed.
 
-Unchanged files whose references are affected are rewritten as *edges-only* entries. Too much
-change (more than 30 % of references, 20 % of files, 5 % of files changed, 200 syncs since the
-last merge, or a changed config file / engine version) falls back to a full rebuild, which is
-also the merge. `cargo test -p cg-sync` generates random edit sequences over a multi-language
+Unchanged files whose references are affected are rewritten as *edges-only* entries. Broad
+reference/file invalidation or changed configuration/engine versions can fall back to a full
+rebuild. Compaction is a separate pure data rewrite of `View(base + delta)`, preserving facts,
+reference outcomes, provenance and metadata without parsing source. After at least 30 seconds
+of quiet, >5% affected files (bases of at least 40 files), 64 MiB, 200 syncs or 10 idle minutes
+make a delta eligible for compaction. The watcher performs maintenance without a source scan
+and yields to an active writer. Readers keep the previous complete snapshot.
+
+`cargo test -p cg-sync` generates random edit sequences over a multi-language
 fixture and requires `canonical(incremental) == canonical(full rebuild)` after every step;
 disabling any rule makes a specific scenario fail (the rules were sabotage-checked).
 `cgr debug diff` runs the same comparison on a real project, `cgr bench sync --verify` does it
 after a random edit run.
 
 One watcher per project is elected through `watch.lock` (released by the OS when a process dies,
-so another session takes over); events are debounced and fed to the same sync.
+so another session takes over). A bounded queue feeds debounced paths to sync, avoiding a whole
+filesystem walk for normal events. Config/directory changes, rescan flags, errors or lost/burst
+events fall back to a full scan. Periodic scanning recovers missing events. The inventory is
+still assembled in memory and earlier delta files may be re-extracted against the same base.
+
+Kernel output buffers accumulated during extraction can spill to shared immutable temporary
+chunks, then be read through the same borrowed ABI views. Source text is not retained there.
+Facts and graph/resolution tables still grow with repository size: `CGR_MEMORY_MB` is a tuning
+budget, not a process RSS limit.
 
 ## Query and MCP (`cg-query`, `cg-mcp`)
 
@@ -96,10 +118,18 @@ so another session takes over); events are debounced and fed to the same sync.
 graph, orders a *flow* section first when the query names endpoints, lists the blast radius, and
 renders line-numbered source windows under a character budget (13k / 18k / 24k by project size,
 hard cap min(1.5×, 25k)). Strings, section titles and notices are the upstream ones with the
-product name substituted. `cg-mcp` is a small hand-written JSON-RPC server: a fixed 4-thread
-pool, a 30 s watchdog that answers with a success-shaped note, project resolution by client roots
+product name substituted. Source windows use a bounded owned text buffer and lazy line offsets;
+mutable working-tree source is reread for each call rather than mmap'd or cached across calls.
+`cg-mcp` is a small hand-written JSON-RPC server: a fixed 4-thread pool with a 16-job admission
+queue, a 30 s deadline with cooperative cancellation, project resolution by client roots
 → `--path` → `projectPath`, a per-session history for optional de-duplication, and the "index
-lags writes" staleness banner based on `stat` of the files in the answer.
+lags writes" staleness banner based on `stat` of the files in the answer. Project LRU eviction
+also releases watcher resources, and repeated old-format/corrupt-index requests share one
+background rebuild. EOF drains short calls briefly, cancels remaining work and stops watchers
+against a shared shutdown deadline. Filesystem blocking calls are not forcibly interruptible.
+
+See [performance implementation](PERFORMANCE-IMPLEMENTATION.md) for the design mapping,
+validation evidence, benchmark preflight result and work that remains.
 
 ## Installer (`cg-install`)
 

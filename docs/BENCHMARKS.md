@@ -1,5 +1,12 @@
 # Local performance comparison
 
+**Revision scope:** these measurements describe `fcc59af`, before the subsequent performance
+implementation update. New compaction, event sync, spill, compression and service changes are
+documented in the bilingual [implementation record](PERFORMANCE-IMPLEMENTATION.md). A new
+guarded measurement was refused at preflight; a final repeat still had only 5,889 MiB available
+memory against the required 6,144 MiB (swap used 977 MiB).
+The historical results below have not been relabeled as measurements of the new revision.
+
 Measured on **2026-11-01** against the upstream CodeGraph source. The tables below use only
 the final measurement round, with AC power checked before and after every command. Earlier
 exploratory rounds, during which the machine changed from battery to AC power, are excluded.

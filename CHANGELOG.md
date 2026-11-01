@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — engine performance follow-through
+
+- Add event-path sync, bounded watcher events and source-free snapshot compaction after a
+  quiet period. Keep full scanning/rebuild fallbacks for broad or structural changes.
+- Spill accumulated kernel buffers to immutable temporary mappings; cap resolver caches and
+  indexing workers by the memory tuning budget. Use the configured pool for table construction
+  and lower indexing-worker priority on Linux/macOS/Windows.
+- Preallocate resolution outcomes, fuse hook trigger scans, and link event keys in bounded,
+  deterministic parallel chunks with selective incremental reconnection.
+- Compress BM25 postings, persist global document lengths, and add adaptive radix edge sorting.
+  **Snapshot format 2 requires rebuilding old indexes with `cgr index`.**
+- Use bounded source text/line-offset views; add MCP backpressure and cooperative cancellation,
+  coalesce background rebuilds, release watcher resources on LRU eviction, and bound shutdown.
+- Bound prompt-hook discovery; repair smoke-helper stdin and timer cleanup on macOS Bash 3.2.
+- Document implementation, correctness validation and remaining boundaries in
+  [English and Chinese](docs/PERFORMANCE-IMPLEMENTATION.md). The historical 6.40× comparison is
+  unchanged; a new benchmark was refused by the resource preflight, so no additional speedup
+  is claimed.
+
 ## 0.1.0 — first release (milestones M0–M4)
 
 **Engine**
@@ -32,4 +51,4 @@
   smoke test, static musl build. Release workflow for six targets with checksums; install scripts.
 
 Not in this release: C/C++, C#, PHP, Ruby, Swift and the other upstream languages; Vue/Svelte;
-code signing and notarisation; npm/PyPI wrappers; Homebrew tap. See docs/STATUS.md.
+code signing and notarisation; npm/PyPI wrappers; Homebrew tap. See the README's current limitations.
