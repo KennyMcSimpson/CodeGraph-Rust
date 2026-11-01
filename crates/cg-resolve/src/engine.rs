@@ -219,11 +219,7 @@ impl<'v> Engine<'v> {
                 // the &str must live as long as the view: take it from the path's own text
                 let path = self.view.file(f).path();
                 let stem = path.rsplit('/').next().unwrap_or("");
-                let name: &'v str = if stem == "mod.rs" {
-                    path.rsplit('/').nth(1).unwrap_or("")
-                } else {
-                    stem.strip_suffix(".rs").unwrap_or(stem)
-                };
+                let name: &'v str = if stem == "mod.rs" { path.rsplit('/').nth(1).unwrap_or("") } else { stem.strip_suffix(".rs").unwrap_or(stem) };
                 let _ = last;
                 Some((pf, name, f))
             })

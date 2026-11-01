@@ -38,11 +38,7 @@ pub fn is_test_path(path: &str) -> bool {
         || lower.starts_with("specs/")
         || lower.starts_with("e2e/")
         || re(&CAMEL_DIR, r"(?:^|/)[A-Za-z0-9]*(?:Test|Tests|Spec)/").is_match(path)
-        || re(
-            &SUPPORT,
-            r"(?:^|/)(?:[\w.]+[-_]test(?:s|ing)?|testdata|testutils?|test[-_]utils?|fakes?|mocks?|__mocks__|stubs)/",
-        )
-        .is_match(&lower)
+        || re(&SUPPORT, r"(?:^|/)(?:[\w.]+[-_]test(?:s|ing)?|testdata|testutils?|test[-_]utils?|fakes?|mocks?|__mocks__|stubs)/").is_match(&lower)
         || re(&UNIT, r"(?:^|/)(?:unittests|[\w.]+[-_]unittests?)/").is_match(&lower)
 }
 
@@ -54,10 +50,7 @@ pub fn is_non_production_dir(path: &str) -> bool {
         None if lower.starts_with("src/") => "",
         None => &lower[..],
     };
-    const DIRS: [&str; 11] = [
-        "integration", "sample", "samples", "example", "examples", "fixture", "fixtures",
-        "benchmark", "benchmarks", "demo", "demos",
-    ];
+    const DIRS: [&str; 11] = ["integration", "sample", "samples", "example", "examples", "fixture", "fixtures", "benchmark", "benchmarks", "demo", "demos"];
     DIRS.iter().any(|d| scope.contains(&format!("/{d}/")) || scope.starts_with(&format!("{d}/")))
 }
 

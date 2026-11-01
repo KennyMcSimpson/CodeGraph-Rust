@@ -30,9 +30,7 @@ fn walk(cx: &mut Cx, n: Node, scope: u32) {
             }
             function(cx, n, scope);
         }
-        "function_expression" | "function" | "generator_function" | "arrow_function" | "method_definition" => {
-            function(cx, n, scope)
-        }
+        "function_expression" | "function" | "generator_function" | "arrow_function" | "method_definition" => function(cx, n, scope),
         "class_declaration" | "abstract_class_declaration" | "class" => class(cx, n, scope),
         "lexical_declaration" | "variable_declaration" => var_decl(cx, n, scope),
         "for_in_statement" => {
@@ -95,9 +93,7 @@ fn ts_type_name(cx: &Cx, n: Node) -> String {
         "type_identifier" | "identifier" => cx.text(n).to_owned(),
         "nested_type_identifier" | "member_expression" => cx.text(n).to_owned(),
         "generic_type" => n.child_by_field_name("name").map(|c| ts_type_name(cx, c)).unwrap_or_default(),
-        "parenthesized_type" | "readonly_type" | "required_parameter" => {
-            n.named_child(0).map(|c| ts_type_name(cx, c)).unwrap_or_default()
-        }
+        "parenthesized_type" | "readonly_type" | "required_parameter" => n.named_child(0).map(|c| ts_type_name(cx, c)).unwrap_or_default(),
         "union_type" | "intersection_type" => {
             for ch in kids(n) {
                 if !ch.is_named() {
@@ -122,17 +118,13 @@ fn value_info(cx: &Cx, v: Node) -> (String, String) {
             let c = v.child_by_field_name("constructor").map(|c| cx.text(c).to_owned()).unwrap_or_default();
             (String::new(), c)
         }
-        "await_expression" | "parenthesized_expression" | "non_null_expression" => {
-            v.named_child(0).map(|c| value_info(cx, c)).unwrap_or_default()
-        }
+        "await_expression" | "parenthesized_expression" | "non_null_expression" => v.named_child(0).map(|c| value_info(cx, c)).unwrap_or_default(),
         "as_expression" | "satisfies_expression" => {
             let t = v.named_child(1).map(|c| ts_type_name(cx, c)).unwrap_or_default();
             (t, String::new())
         }
         "call_expression" => match v.child_by_field_name("function") {
-            Some(f) if matches!(f.kind(), "identifier" | "member_expression") => {
-                (String::new(), format!("{}()", cx.text(f)))
-            }
+            Some(f) if matches!(f.kind(), "identifier" | "member_expression") => (String::new(), format!("{}()", cx.text(f))),
             _ => Default::default(),
         },
         _ => Default::default(),
@@ -203,29 +195,13 @@ fn import_stmt(cx: &mut Cx, n: Node, scope: u32) {
             "import_require_clause" => {
                 any = true;
                 let local = kids(clause).find(|c| c.kind() == "identifier").map(|c| cx.text(c).to_owned()).unwrap_or_default();
-                cx.add_import(ImportFact {
-                    local,
-                    imported: "*".into(),
-                    spec: spec.clone(),
-                    kind: ImportKind::Require,
-                    type_only: false,
-                    scope,
-                    line,
-                });
+                cx.add_import(ImportFact { local, imported: "*".into(), spec: spec.clone(), kind: ImportKind::Require, type_only: false, scope, line });
             }
             _ => {}
         }
     }
     if !any {
-        cx.add_import(ImportFact {
-            local: String::new(),
-            imported: "*".into(),
-            spec,
-            kind: ImportKind::SideEffect,
-            type_only: false,
-            scope,
-            line,
-        });
+        cx.add_import(ImportFact { local: String::new(), imported: "*".into(), spec, kind: ImportKind::SideEffect, type_only: false, scope, line });
     }
 }
 
@@ -235,7 +211,15 @@ fn export_stmt(cx: &mut Cx, n: Node) {
         // `export ... from 'x'` depends on module `x`; recorded like a side-effect import so the
         // module reference resolves to the target file.
         let line = cx.line(n);
-        cx.add_import(ImportFact { local: String::new(), imported: "*".into(), spec: spec.clone(), kind: ImportKind::SideEffect, type_only: false, scope: 0, line });
+        cx.add_import(ImportFact {
+            local: String::new(),
+            imported: "*".into(),
+            spec: spec.clone(),
+            kind: ImportKind::SideEffect,
+            type_only: false,
+            scope: 0,
+            line,
+        });
     }
     let is_default = kids(n).any(|c| c.kind() == "default");
     let mut had_clause = false;

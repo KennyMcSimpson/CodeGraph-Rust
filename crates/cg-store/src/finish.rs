@@ -97,17 +97,14 @@ pub fn finish(draft: Draft, input: FinishInput) -> Seg {
     edges::install(&mut seg, asm);
 
     // ---- tail index: refs by tail key ----
-    let mut tails: Vec<TailRec> =
-        seg.p.refs.par_iter().enumerate().map(|(i, r)| TailRec { tail: r.tail, ref_idx: i as u32 }).collect();
+    let mut tails: Vec<TailRec> = seg.p.refs.par_iter().enumerate().map(|(i, r)| TailRec { tail: r.tail, ref_idx: i as u32 }).collect();
     tails.par_sort_unstable_by_key(|t| (t.tail.0, t.ref_idx));
     seg.p.tail_idx = Part::owned(tails);
 
     // ---- search indexes ----
     let name_post_off = seg.p.name_post_off.clone();
     let qname_post_off = seg.p.qname_post_off.clone();
-    let ni = index::build_name_indexes(&seg.names, |i| {
-        name_post_off[i + 1] > name_post_off[i] || qname_post_off[i + 1] > qname_post_off[i]
-    });
+    let ni = index::build_name_indexes(&seg.names, |i| name_post_off[i + 1] > name_post_off[i] || qname_post_off[i + 1] > qname_post_off[i]);
     seg.p.names_fst = Part::owned(ni.names_fst);
     seg.p.lower_fst = Part::owned(ni.lower_fst);
     seg.p.lower_post_off = Part::owned(ni.lower_post_off);

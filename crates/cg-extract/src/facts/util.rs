@@ -144,9 +144,7 @@ pub fn simple_type_name(t: &str) -> String {
     if s.starts_with('\'') {
         s = s.split_whitespace().nth(1).unwrap_or("");
     }
-    let end = s
-        .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$' || c == '.' || c == ':'))
-        .unwrap_or(s.len());
+    let end = s.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$' || c == '.' || c == ':')).unwrap_or(s.len());
     let name = s[..end].trim_end_matches(':').trim_end_matches('.');
     // `[]Foo` (Go slices) and `Foo[]` land here as empty or `Foo`
     name.to_owned()

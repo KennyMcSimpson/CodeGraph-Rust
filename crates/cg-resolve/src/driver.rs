@@ -89,8 +89,7 @@ pub fn hierarchy_pairs(e: &Engine<'_>, outcomes: &[(u32, Outcome)]) -> Vec<(Node
         .filter(|(_, o)| o.status == status::RESOLVED)
         .filter_map(|(id, o)| {
             let r = e.view.reference(*id);
-            matches!(RefKind::from_wire(r.kind), Some(RefKind::Edge(EdgeKind::Extends | EdgeKind::Implements)))
-                .then_some((r.from, NodeIdx(o.target)))
+            matches!(RefKind::from_wire(r.kind), Some(RefKind::Edge(EdgeKind::Extends | EdgeKind::Implements))).then_some((r.from, NodeIdx(o.target)))
         })
         .collect()
 }
@@ -99,7 +98,10 @@ pub fn hierarchy_pairs(e: &Engine<'_>, outcomes: &[(u32, Outcome)]) -> Vec<(Node
 pub fn final_kind(rk: RefKind, src: NodeKind, dst: NodeKind, lang: Lang) -> EdgeKind {
     match rk {
         RefKind::FunctionRef => EdgeKind::References,
-        RefKind::Edge(EdgeKind::Extends) if matches!(dst, NodeKind::Interface | NodeKind::Protocol | NodeKind::Trait) && !matches!(src, NodeKind::Interface | NodeKind::Protocol | NodeKind::Trait) => {
+        RefKind::Edge(EdgeKind::Extends)
+            if matches!(dst, NodeKind::Interface | NodeKind::Protocol | NodeKind::Trait)
+                && !matches!(src, NodeKind::Interface | NodeKind::Protocol | NodeKind::Trait) =>
+        {
             EdgeKind::Implements
         }
         RefKind::Edge(EdgeKind::Calls) => {
@@ -191,11 +193,5 @@ pub fn resolve_all(e: &mut Engine<'_>) -> ResolveOutput {
             export_targets.push(e.export_target(f, ex));
         }
     }
-    ResolveOutput {
-        export_targets,
-        updates: outcomes.iter().map(update_of).collect(),
-        edges,
-        emeta: vec![FNREF_META.to_owned()],
-        import_targets,
-    }
+    ResolveOutput { export_targets, updates: outcomes.iter().map(update_of).collect(), edges, emeta: vec![FNREF_META.to_owned()], import_targets }
 }

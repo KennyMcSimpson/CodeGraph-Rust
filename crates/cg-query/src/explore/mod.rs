@@ -198,12 +198,7 @@ impl Graph {
         for nt in named.iter_mut() {
             if nt.nodes.len() > 1 {
                 for set in [&named_types, &pascal_types] {
-                    let pref: Vec<NodeIdx> = nt
-                        .nodes
-                        .iter()
-                        .copied()
-                        .filter(|n| self.containers(*n).first().map_or(false, |c| set.contains(c)))
-                        .collect();
+                    let pref: Vec<NodeIdx> = nt.nodes.iter().copied().filter(|n| self.containers(*n).first().map_or(false, |c| set.contains(c))).collect();
                     if !pref.is_empty() && pref.len() < nt.nodes.len() {
                         nt.nodes = pref;
                         break;
@@ -307,11 +302,27 @@ impl Graph {
         let mut groups: FxHashMap<FileId, FileGroup> = FxHashMap::default();
         for (n, s) in &rel {
             let f = self.view.hot(*n).file;
-            let g = groups.entry(f).or_insert_with(|| FileGroup { file: f, nodes: Vec::new(), score: 0.0, pinned: None, named: false, on_flow: false, anchors: Vec::new() });
+            let g = groups.entry(f).or_insert_with(|| FileGroup {
+                file: f,
+                nodes: Vec::new(),
+                score: 0.0,
+                pinned: None,
+                named: false,
+                on_flow: false,
+                anchors: Vec::new(),
+            });
             g.nodes.push((*n, *s));
         }
         for (i, (f, anchor)) in pinned.iter().enumerate() {
-            let g = groups.entry(*f).or_insert_with(|| FileGroup { file: *f, nodes: Vec::new(), score: 0.0, pinned: None, named: false, on_flow: false, anchors: Vec::new() });
+            let g = groups.entry(*f).or_insert_with(|| FileGroup {
+                file: *f,
+                nodes: Vec::new(),
+                score: 0.0,
+                pinned: None,
+                named: false,
+                on_flow: false,
+                anchors: Vec::new(),
+            });
             g.pinned = Some(i);
             if let Some(a) = anchor {
                 g.anchors.push(*a);
@@ -327,19 +338,8 @@ impl Graph {
         }
         let mut ranked: Vec<FileGroup> = groups.into_values().collect();
         ranked.sort_by(|a, b| {
-            let key = |g: &FileGroup| {
-                (
-                    g.pinned.is_none(),
-                    g.pinned.unwrap_or(0),
-                    !g.on_flow,
-                    !g.named,
-                    self.is_generated_file(g.file),
-                )
-            };
-            key(a)
-                .cmp(&key(b))
-                .then(b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal))
-                .then_with(|| self.path(a.file).cmp(self.path(b.file)))
+            let key = |g: &FileGroup| (g.pinned.is_none(), g.pinned.unwrap_or(0), !g.on_flow, !g.named, self.is_generated_file(g.file));
+            key(a).cmp(&key(b)).then(b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)).then_with(|| self.path(a.file).cmp(self.path(b.file)))
         });
 
         // 6-7. budget and source windows
@@ -616,7 +616,26 @@ impl Graph {
                 }
             }
         }
-        let meaningful = |k: NodeKind| matches!(k, NodeKind::Function | NodeKind::Method | NodeKind::Class | NodeKind::Interface | NodeKind::Struct | NodeKind::Union | NodeKind::Trait | NodeKind::Protocol | NodeKind::Enum | NodeKind::TypeAlias | NodeKind::Component | NodeKind::Constant | NodeKind::Variable | NodeKind::Property | NodeKind::Field);
+        let meaningful = |k: NodeKind| {
+            matches!(
+                k,
+                NodeKind::Function
+                    | NodeKind::Method
+                    | NodeKind::Class
+                    | NodeKind::Interface
+                    | NodeKind::Struct
+                    | NodeKind::Union
+                    | NodeKind::Trait
+                    | NodeKind::Protocol
+                    | NodeKind::Enum
+                    | NodeKind::TypeAlias
+                    | NodeKind::Component
+                    | NodeKind::Constant
+                    | NodeKind::Variable
+                    | NodeKind::Property
+                    | NodeKind::Field
+            )
+        };
         roots.retain(|n| meaningful(self.kind(*n)));
         roots.truncate(5);
         let mut entries: Vec<String> = Vec::new();
@@ -635,7 +654,11 @@ impl Graph {
             let tests_s = if tests.is_empty() {
                 String::new()
             } else {
-                format!("; tests: {}{}", tests.iter().take(4).map(|f| format!("`{}`", self.path(*f))).collect::<Vec<_>>().join(", "), if tests.len() > 4 { format!(" +{}", tests.len() - 4) } else { String::new() })
+                format!(
+                    "; tests: {}{}",
+                    tests.iter().take(4).map(|f| format!("`{}`", self.path(*f))).collect::<Vec<_>>().join(", "),
+                    if tests.len() > 4 { format!(" +{}", tests.len() - 4) } else { String::new() }
+                )
             };
             entries.push(format!(
                 "- `{}` ({}:{}) — {} caller{}{where_}{tests_s}",

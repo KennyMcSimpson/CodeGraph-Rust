@@ -51,11 +51,7 @@ pub struct ScanResult {
 }
 
 pub fn mtime_ns(meta: &std::fs::Metadata) -> i64 {
-    meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos() as i64)
-        .unwrap_or(0)
+    meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_nanos() as i64).unwrap_or(0)
 }
 
 pub fn rel_string(root: &Path, p: &Path) -> Option<String> {
@@ -103,9 +99,7 @@ pub fn stat_entry(rules: &IgnoreRules, cfg: &ProjectConfig, rel: &str) -> Option
     if meta.file_type().is_symlink() {
         return None;
     }
-    if rules.is_ignored(rel, false)
-        && !(rules.has_include() && rules.matches_include(rel, false) && !rules.builtin_ignored(rel, false))
-    {
+    if rules.is_ignored(rel, false) && !(rules.has_include() && rules.matches_include(rel, false) && !rules.builtin_ignored(rel, false)) {
         return None;
     }
     match judge(rel, &meta, cfg, MAX_SOURCE_FILE_SIZE_BYTES) {
@@ -133,13 +127,7 @@ impl Drop for Sink {
     }
 }
 
-fn walk(
-    root: &Path,
-    rules: Arc<IgnoreRules>,
-    cfg: &ProjectConfig,
-    max: u64,
-    only_included: bool,
-) -> Vec<Collected> {
+fn walk(root: &Path, rules: Arc<IgnoreRules>, cfg: &ProjectConfig, max: u64, only_included: bool) -> Vec<Collected> {
     let out: Arc<Mutex<Vec<Collected>>> = Arc::new(Mutex::new(Vec::new()));
     let mut builder = WalkBuilder::new(root);
     builder.standard_filters(false).follow_links(false);
@@ -159,21 +147,13 @@ fn walk(
             }
             let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
             if is_dir {
-                let skip = if only_included {
-                    rules.builtin_ignored(&rel, true)
-                } else {
-                    rules.is_ignored(&rel, true)
-                };
+                let skip = if only_included { rules.builtin_ignored(&rel, true) } else { rules.is_ignored(&rel, true) };
                 return if skip { WalkState::Skip } else { WalkState::Continue };
             }
             if entry.file_type().map(|t| t.is_symlink()).unwrap_or(false) {
                 return WalkState::Continue;
             }
-            let keep = if only_included {
-                rules.matches_include(&rel, false) && !rules.builtin_ignored(&rel, false)
-            } else {
-                !rules.is_ignored(&rel, false)
-            };
+            let keep = if only_included { rules.matches_include(&rel, false) && !rules.builtin_ignored(&rel, false) } else { !rules.is_ignored(&rel, false) };
             if !keep {
                 return WalkState::Continue;
             }
@@ -216,10 +196,7 @@ fn git_tracked_ignored(root: &Path) -> Vec<String> {
     match rx.recv_timeout(Duration::from_secs(10)) {
         Ok(buf) => {
             let _ = child.wait();
-            buf.split(|b| *b == 0)
-                .filter(|s| !s.is_empty())
-                .filter_map(|s| std::str::from_utf8(s).ok().map(str::to_owned))
-                .collect()
+            buf.split(|b| *b == 0).filter(|s| !s.is_empty()).filter_map(|s| std::str::from_utf8(s).ok().map(str::to_owned)).collect()
         }
         Err(_) => {
             let _ = child.kill();
@@ -236,9 +213,21 @@ pub fn find_config_files(root: &Path, config: &ProjectConfig, max_depth: usize) 
     let is_config = |name: &str| {
         matches!(
             name,
-            "package.json" | "jsconfig.json" | "go.mod" | "go.work" | "Cargo.toml" | "pyproject.toml" | "setup.cfg"
-                | "setup.py" | "requirements.txt" | "pom.xml" | "build.gradle" | "build.gradle.kts" | "settings.gradle"
-                | "settings.gradle.kts" | "composer.json"
+            "package.json"
+                | "jsconfig.json"
+                | "go.mod"
+                | "go.work"
+                | "Cargo.toml"
+                | "pyproject.toml"
+                | "setup.cfg"
+                | "setup.py"
+                | "requirements.txt"
+                | "pom.xml"
+                | "build.gradle"
+                | "build.gradle.kts"
+                | "settings.gradle"
+                | "settings.gradle.kts"
+                | "composer.json"
         ) || (name.starts_with("tsconfig") && name.ends_with(".json"))
             || (name.starts_with("requirements") && name.ends_with(".txt"))
     };
@@ -337,12 +326,7 @@ mod tests {
     #[test]
     fn size_cap_and_include() {
         let big = "x".repeat(2 * 1024 * 1024);
-        let d = tree(&[
-            ("big.js", &big),
-            ("Tools/t.ts", "export {}"),
-            (".gitignore", "Tools/\n"),
-            ("cgr.json", r#"{"include":["Tools/"]}"#),
-        ]);
+        let d = tree(&[("big.js", &big), ("Tools/t.ts", "export {}"), (".gitignore", "Tools/\n"), ("cgr.json", r#"{"include":["Tools/"]}"#)]);
         let mut opts = ScanOptions::new(d.path());
         opts.tracked_ignored = false;
         let r = scan(&opts);

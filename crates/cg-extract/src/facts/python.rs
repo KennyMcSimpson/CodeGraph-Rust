@@ -81,8 +81,8 @@ pub fn py_type_name(text: &str) -> String {
     }
     let name = simple_type_name(t);
     match name.as_str() {
-        "int" | "str" | "float" | "bool" | "bytes" | "list" | "dict" | "set" | "tuple" | "None" | "Any" | "object"
-        | "List" | "Dict" | "Set" | "Tuple" | "Callable" | "Iterable" | "Iterator" | "Sequence" | "Mapping" => String::new(),
+        "int" | "str" | "float" | "bool" | "bytes" | "list" | "dict" | "set" | "tuple" | "None" | "Any" | "object" | "List" | "Dict" | "Set" | "Tuple"
+        | "Callable" | "Iterable" | "Iterator" | "Sequence" | "Mapping" => String::new(),
         _ => name,
     }
 }
@@ -147,7 +147,15 @@ fn from_import(cx: &mut Cx, n: Node, scope: u32) {
             }
             "wildcard_import" => {
                 any = true;
-                cx.add_import(ImportFact { local: "*".into(), imported: "*".into(), spec: spec.clone(), kind: ImportKind::Namespace, type_only: false, scope, line });
+                cx.add_import(ImportFact {
+                    local: "*".into(),
+                    imported: "*".into(),
+                    spec: spec.clone(),
+                    kind: ImportKind::Namespace,
+                    type_only: false,
+                    scope,
+                    line,
+                });
             }
             _ => {}
         }
@@ -243,7 +251,11 @@ fn assignment(cx: &mut Cx, n: Node, scope: u32) {
                     if let Some(cs) = cx.class_scope_of(scope) {
                         let nm = cx.text(attr).to_owned();
                         // keep the first typed assignment of a field
-                        let already = cx.facts.bindings.iter().any(|b| b.scope == cs && b.name == nm && b.kind == BindKind::Field && (!b.decl_type.is_empty() || !b.init_ctor.is_empty()));
+                        let already = cx
+                            .facts
+                            .bindings
+                            .iter()
+                            .any(|b| b.scope == cs && b.name == nm && b.kind == BindKind::Field && (!b.decl_type.is_empty() || !b.init_ctor.is_empty()));
                         if !already || !(decl.is_empty() && init.is_empty()) {
                             cx.add_binding(cs, &nm, BindKind::Field, &decl, &init, line);
                         }

@@ -296,10 +296,7 @@ fn parse_tsconfig(root: &Path, rel: &str, depth: u32) -> Option<TsConfig> {
         out.paths = paths
             .iter()
             .map(|(pat, targets)| {
-                let ts = targets
-                    .as_array()
-                    .map(|a| a.iter().filter_map(|t| t.as_str()).map(|t| join_rel(&anchor, t)).collect())
-                    .unwrap_or_default();
+                let ts = targets.as_array().map(|a| a.iter().filter_map(|t| t.as_str()).map(|t| join_rel(&anchor, t)).collect()).unwrap_or_default();
                 (pat.clone(), ts)
             })
             .collect();
@@ -329,8 +326,11 @@ mod tests {
             fs::write(path, c).unwrap();
         };
         w("package.json", r#"{"name":"app","main":"./dist/index.js","dependencies":{"express":"^4","react":"18"}}"#);
-        w("tsconfig.base.json", r#"{ // comment
-          "compilerOptions": {"baseUrl": ".", "paths": {"@lib/*": ["packages/lib/src/*"]}}}"#);
+        w(
+            "tsconfig.base.json",
+            r#"{ // comment
+          "compilerOptions": {"baseUrl": ".", "paths": {"@lib/*": ["packages/lib/src/*"]}}}"#,
+        );
         w("web/tsconfig.json", r#"{"extends":"../tsconfig.base.json","compilerOptions":{"paths":{"@/*":["src/*"]}}}"#);
         w("go.mod", "module example.com/proj\n\ngo 1.22\n");
         w("crates/a/Cargo.toml", "[package]\nname = \"my-crate\"\n[dependencies]\naxum = \"0.7\"\n");

@@ -324,14 +324,7 @@ impl View {
         let nb = self.base.p.files.len() as u32;
         let added: Vec<u32> = match self.d() {
             Some(d) => {
-                let mut v: Vec<u32> = d
-                    .seg
-                    .p
-                    .delta_files
-                    .chunks_exact(3)
-                    .filter(|t| t[1] == DeltaState::New as u32)
-                    .map(|t| t[0])
-                    .collect();
+                let mut v: Vec<u32> = d.seg.p.delta_files.chunks_exact(3).filter(|t| t[1] == DeltaState::New as u32).map(|t| t[0]).collect();
                 v.sort_unstable();
                 v
             }
@@ -359,9 +352,9 @@ impl View {
             return None;
         }
         // A base path whose id equals a file id only if the pool is exactly the file list.
-        (self.base.p.files.get(f.idx()).map(|r| r.path) == Some(sid)).then_some(f).or_else(|| {
-            self.base.p.files.iter().position(|r| r.path == sid).map(|i| FileId(i as u32))
-        })
+        (self.base.p.files.get(f.idx()).map(|r| r.path) == Some(sid))
+            .then_some(f)
+            .or_else(|| self.base.p.files.iter().position(|r| r.path == sid).map(|i| FileId(i as u32)))
     }
 
     // ------------------------------------------------------------------ nodes
@@ -440,16 +433,12 @@ impl View {
 
     /// Definitions whose simple name is exactly `s` (not imports / exports / parameters / files).
     pub fn by_name<'a>(&'a self, s: &str) -> Posting<'a> {
-        self.postings_for(s.as_bytes(), &self.base.p.name_post_off, &self.base.p.name_post, |d| {
-            (&d.seg.p.name_post_off, &d.seg.p.name_post)
-        })
+        self.postings_for(s.as_bytes(), &self.base.p.name_post_off, &self.base.p.name_post, |d| (&d.seg.p.name_post_off, &d.seg.p.name_post))
     }
 
     /// Definitions whose qualified name is exactly `s`.
     pub fn by_qname<'a>(&'a self, s: &str) -> Posting<'a> {
-        self.postings_for(s.as_bytes(), &self.base.p.qname_post_off, &self.base.p.qname_post, |d| {
-            (&d.seg.p.qname_post_off, &d.seg.p.qname_post)
-        })
+        self.postings_for(s.as_bytes(), &self.base.p.qname_post_off, &self.base.p.qname_post, |d| (&d.seg.p.qname_post_off, &d.seg.p.qname_post))
     }
 
     /// Definitions named like the names-pool string `id` (base or delta id).

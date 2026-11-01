@@ -178,10 +178,7 @@ fn import_equals_tail(before: &str) -> bool {
     let Some(t) = t.strip_suffix('=') else { return false };
     let t = t.trim_end();
     let name_end = t.len();
-    let name_start = t
-        .rfind(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
-        .map(|i| i + 1)
-        .unwrap_or(0);
+    let name_start = t.rfind(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).map(|i| i + 1).unwrap_or(0);
     if name_start == name_end {
         return false;
     }

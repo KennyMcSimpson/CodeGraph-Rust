@@ -34,7 +34,17 @@ struct Out {
 }
 
 impl Out {
-    fn push(&mut self, kind: EdgeKind, src: NodeIdx, dst: NodeIdx, line: u32, by: &str, registered_at: Option<String>, extra: Option<(&str, &str)>, order: u16) {
+    fn push(
+        &mut self,
+        kind: EdgeKind,
+        src: NodeIdx,
+        dst: NodeIdx,
+        line: u32,
+        by: &str,
+        registered_at: Option<String>,
+        extra: Option<(&str, &str)>,
+        order: u16,
+    ) {
         if src == dst {
             return;
         }
@@ -202,7 +212,8 @@ fn interface_impl(e: &Engine<'_>, subs: &FxHashMap<NodeIdx, Vec<NodeIdx>>, out: 
         if descs.is_empty() {
             continue;
         }
-        let mut members: Vec<NodeIdx> = view.out_edges(t).filter(|ed| ed.kind == EdgeKind::Contains).map(|ed| ed.dst).filter(|m| view.node(*m).kind() == NodeKind::Method).collect();
+        let mut members: Vec<NodeIdx> =
+            view.out_edges(t).filter(|ed| ed.kind == EdgeKind::Contains).map(|ed| ed.dst).filter(|m| view.node(*m).kind() == NodeKind::Method).collect();
         // Go / Rust declare trait-like methods through qualified names as well
         members.sort();
         for m in members {
@@ -263,7 +274,10 @@ fn event_emitter<'e, 'v>(e: &'e Engine<'v>, out: &mut Out, wcx: &mut WorkerCx<'e
             let name = handler.rsplit('.').next().unwrap_or(handler);
             let cx = wcx.file_cx(e, *f);
             let t = if handler.starts_with("this.") {
-                view.node(*reg).parent().and_then(|c| e.direct_member(c, name)).or_else(|| view.node(*reg).parent().and_then(|c| view.node(c).parent()).and_then(|c| e.direct_member(c, name)))
+                view.node(*reg)
+                    .parent()
+                    .and_then(|c| e.direct_member(c, name))
+                    .or_else(|| view.node(*reg).parent().and_then(|c| view.node(c).parent()).and_then(|c| e.direct_member(c, name)))
             } else if !handler.contains('.') {
                 match cx.resolve_name(wcx, name, Accept::Callable, 0, u32::MAX, None, false) {
                     NameRes::Found(n, ..) => Some(n),

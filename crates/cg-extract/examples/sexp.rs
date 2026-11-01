@@ -7,9 +7,17 @@ fn main() {
     p.set_language(&cg_kernel::hooks::language(&lang).unwrap()).unwrap();
     let t = p.parse(&src, None).unwrap();
     fn show(n: tree_sitter::Node, src: &str, depth: usize, field: Option<&str>) {
-        if !n.is_named() { return; }
+        if !n.is_named() {
+            return;
+        }
         let text: String = src[n.start_byte()..n.end_byte()].chars().take(40).collect::<String>().replace('\n', "\\n");
-        println!("{}{}{} [{}]", "  ".repeat(depth), field.map(|f| format!("{f}: ")).unwrap_or_default(), n.kind(), if n.child_count() == 0 { text } else { String::new() });
+        println!(
+            "{}{}{} [{}]",
+            "  ".repeat(depth),
+            field.map(|f| format!("{f}: ")).unwrap_or_default(),
+            n.kind(),
+            if n.child_count() == 0 { text } else { String::new() }
+        );
         let mut c = n.walk();
         for (i, ch) in n.children(&mut c).enumerate() {
             show(ch, src, depth + 1, n.field_name_for_child(i as u32));

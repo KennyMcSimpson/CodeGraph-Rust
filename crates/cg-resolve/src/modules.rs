@@ -381,11 +381,8 @@ impl<'v> Modules<'v> {
                 base = parent_dir(&base).to_owned();
             }
             let rel = rest.replace('.', "/");
-            let candidates = if rel.is_empty() {
-                vec![format!("{base}/__init__.py")]
-            } else {
-                vec![format!("{base}/{rel}.py"), format!("{base}/{rel}/__init__.py")]
-            };
+            let candidates =
+                if rel.is_empty() { vec![format!("{base}/__init__.py")] } else { vec![format!("{base}/{rel}.py"), format!("{base}/{rel}/__init__.py")] };
             for c in candidates {
                 let c = c.trim_start_matches('/').to_owned();
                 if let Some(f) = self.path_to_file.get(c.as_str()) {
@@ -407,11 +404,7 @@ impl<'v> Modules<'v> {
     fn resolve_go(&self, spec: &str, from_path: &str) -> ImportTarget {
         let _ = from_path;
         for gm in &self.project.go_mods {
-            let rest = if spec == gm.module {
-                Some("")
-            } else {
-                spec.strip_prefix(gm.module.as_str()).and_then(|r| r.strip_prefix('/'))
-            };
+            let rest = if spec == gm.module { Some("") } else { spec.strip_prefix(gm.module.as_str()).and_then(|r| r.strip_prefix('/')) };
             if let Some(rest) = rest {
                 let dir = normalize(&format!("{}/{rest}", gm.dir));
                 if let Some(pkgs) = self.go_dir_pkgs.get(dir.as_str()) {

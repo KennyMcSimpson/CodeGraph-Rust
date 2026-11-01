@@ -73,7 +73,8 @@ pub fn index(path: Option<PathBuf>, _force: bool, quiet: bool, timings: bool, re
 
 pub fn sync(path: Option<PathBuf>, quiet: bool) -> Result<i32> {
     let start = start_dir(path)?;
-    let store = cg_store::Store::locate(&start).ok_or_else(|| anyhow!("no {} index found from {} (run `{} init` first)", brand::DATA_DIR, start.display(), brand::BIN_NAME))?;
+    let store = cg_store::Store::locate(&start)
+        .ok_or_else(|| anyhow!("no {} index found from {} (run `{} init` first)", brand::DATA_DIR, start.display(), brand::BIN_NAME))?;
     let report = cg_sync::sync(&store.root, &Default::default())?;
     if !quiet {
         println!("{}", report.summary());
@@ -92,15 +93,18 @@ pub fn status(path: Option<PathBuf>, json: bool, strict: bool, verify: bool) -> 
     let m = &proj.snap.manifest;
     let info = proj.status_info();
     if json {
-        println!("{}", serde_json::to_string_pretty(&json!({
-            "schema": 1,
-            "root": proj.root().display().to_string(),
-            "files": info.files, "nodes": info.nodes, "edges": info.edges,
-            "generation": m.generation, "engineVersion": m.engine_version, "engineOutdated": info.engine_outdated,
-            "bytes": info.bytes, "updatedAt": info.built_at, "deltaLayer": m.delta.is_some(),
-            "verified": verify,
-            "changes": cg_sync::measure_changes(proj.root(), &proj.snap.view).ok().map(|c| json!({"added": c.added, "modified": c.modified, "removed": c.removed})),
-        }))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "schema": 1,
+                "root": proj.root().display().to_string(),
+                "files": info.files, "nodes": info.nodes, "edges": info.edges,
+                "generation": m.generation, "engineVersion": m.engine_version, "engineOutdated": info.engine_outdated,
+                "bytes": info.bytes, "updatedAt": info.built_at, "deltaLayer": m.delta.is_some(),
+                "verified": verify,
+                "changes": cg_sync::measure_changes(proj.root(), &proj.snap.view).ok().map(|c| json!({"added": c.added, "modified": c.modified, "removed": c.removed})),
+            }))?
+        );
     } else {
         println!("files {}  nodes {}  edges {}  generation {}", m.n_files, m.n_nodes, m.n_edges, m.generation);
         for (name, n) in dump::ref_stats(&proj.snap.view) {
@@ -134,7 +138,8 @@ pub fn query(base: Option<PathBuf>, search: &str, kind: Option<String>, limit: u
     }
     let proj = open(base)?;
     let g = &proj.graph;
-    let kinds: Vec<cg_core::NodeKind> = kind.as_deref().and_then(|k| if k == "type" { Some(cg_core::NodeKind::TypeAlias) } else { cg_core::NodeKind::parse(k) }).into_iter().collect();
+    let kinds: Vec<cg_core::NodeKind> =
+        kind.as_deref().and_then(|k| if k == "type" { Some(cg_core::NodeKind::TypeAlias) } else { cg_core::NodeKind::parse(k) }).into_iter().collect();
     let hits = g.search(search, &cg_query::SearchOptions { limit, kinds, ..Default::default() });
     let arr: Vec<_> = hits
         .iter()
@@ -158,7 +163,15 @@ pub fn explore(base: Option<PathBuf>, query: &str, max_files: Option<usize>) -> 
     call(base, "explore", args)
 }
 
-pub fn node(base: Option<PathBuf>, target: &str, code: bool, file: Option<String>, offset: Option<usize>, limit: Option<usize>, symbols_only: bool) -> Result<i32> {
+pub fn node(
+    base: Option<PathBuf>,
+    target: &str,
+    code: bool,
+    file: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    symbols_only: bool,
+) -> Result<i32> {
     let proj = open(base.clone())?;
     // A name that resolves to a symbol is a symbol; otherwise treat the argument as a file.
     let is_symbol = !proj.graph.resolve_symbol(target).is_empty();
@@ -307,7 +320,14 @@ pub fn export_sqlite(base: Option<PathBuf>, out: PathBuf, force: bool) -> Result
     let st = crate::export::export_sqlite(&proj, &out, force)?;
     println!(
         "exported {} files, {} nodes, {} edges, {} references and {} imports to {} ({:.1} MB, {:.2}s)",
-        st.files, st.nodes, st.edges, st.refs, st.imports, out.display(), st.bytes as f64 / 1048576.0, t0.elapsed().as_secs_f64()
+        st.files,
+        st.nodes,
+        st.edges,
+        st.refs,
+        st.imports,
+        out.display(),
+        st.bytes as f64 / 1048576.0,
+        t0.elapsed().as_secs_f64()
     );
     Ok(0)
 }
@@ -426,7 +446,16 @@ pub fn serve(base: Option<PathBuf>, http: Option<String>, token: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn install(base: Option<PathBuf>, agents: Vec<String>, local: bool, hook: bool, permissions: bool, dry_run: bool, bin: Option<PathBuf>, installing: bool) -> Result<i32> {
+pub fn install(
+    base: Option<PathBuf>,
+    agents: Vec<String>,
+    local: bool,
+    hook: bool,
+    permissions: bool,
+    dry_run: bool,
+    bin: Option<PathBuf>,
+    installing: bool,
+) -> Result<i32> {
     use cg_install::{targets, Action, Env, Request};
     let env = Env::from_process();
     let project = match base {
@@ -435,7 +464,10 @@ pub fn install(base: Option<PathBuf>, agents: Vec<String>, local: bool, hook: bo
     };
     let bin = match bin {
         Some(b) => b,
-        None => std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()).ok_or_else(|| anyhow!("cannot determine the path of this executable; pass --bin"))?,
+        None => std::env::current_exe()
+            .ok()
+            .and_then(|p| p.canonicalize().ok())
+            .ok_or_else(|| anyhow!("cannot determine the path of this executable; pass --bin"))?,
     };
     let req = Request { bin, local, project, hook, permissions, dry_run };
     let all = targets();

@@ -16,7 +16,24 @@ pub const ROLE_ON: u8 = 1;
 
 /// Event names too generic to link on (design doc 7.3).
 const GENERIC_EVENTS: &[&str] = &[
-    "error", "data", "end", "close", "open", "message", "connect", "disconnect", "ready", "finish", "drain", "timeout", "abort", "exit", "load", "resize", "click", "change",
+    "error",
+    "data",
+    "end",
+    "close",
+    "open",
+    "message",
+    "connect",
+    "disconnect",
+    "ready",
+    "finish",
+    "drain",
+    "timeout",
+    "abort",
+    "exit",
+    "load",
+    "resize",
+    "click",
+    "change",
 ];
 
 fn event_re() -> &'static Regex {
@@ -91,10 +108,28 @@ impl FileHook for SiteScanner {
                 if is_emit {
                     // an emit must happen inside a method or function
                     let Some(row) = row else { continue };
-                    out.sites.push(SiteFact { pass: PASS_EMITTER, role: ROLE_EMIT, key_kind: 0, key_a: event.to_owned(), key_b: String::new(), node_row: row, line, payload: String::new() });
+                    out.sites.push(SiteFact {
+                        pass: PASS_EMITTER,
+                        role: ROLE_EMIT,
+                        key_kind: 0,
+                        key_a: event.to_owned(),
+                        key_b: String::new(),
+                        node_row: row,
+                        line,
+                        payload: String::new(),
+                    });
                 } else if let Some(h) = m.get(4) {
                     // a registration may sit at the top level of the file
-                    out.sites.push(SiteFact { pass: PASS_EMITTER, role: ROLE_ON, key_kind: 0, key_a: event.to_owned(), key_b: String::new(), node_row: row.unwrap_or(cg_core::NONE), line, payload: h.as_str().to_owned() });
+                    out.sites.push(SiteFact {
+                        pass: PASS_EMITTER,
+                        role: ROLE_ON,
+                        key_kind: 0,
+                        key_a: event.to_owned(),
+                        key_b: String::new(),
+                        node_row: row.unwrap_or(cg_core::NONE),
+                        line,
+                        payload: h.as_str().to_owned(),
+                    });
                 }
             }
         }
@@ -104,13 +139,31 @@ impl FileHook for SiteScanner {
             for m in component_class_re().find_iter(src) {
                 let line = line_of(src, m.start());
                 if let Some(row) = enclosing(ctx, line, &[NodeKind::Class]) {
-                    out.sites.push(SiteFact { pass: PASS_REACT_RENDER, role: 1, key_kind: 2, key_a: String::new(), key_b: String::new(), node_row: row, line, payload: String::new() });
+                    out.sites.push(SiteFact {
+                        pass: PASS_REACT_RENDER,
+                        role: 1,
+                        key_kind: 2,
+                        key_a: String::new(),
+                        key_b: String::new(),
+                        node_row: row,
+                        line,
+                        payload: String::new(),
+                    });
                 }
             }
             for m in set_state_re().find_iter(src) {
                 let line = line_of(src, m.start());
                 if let Some(row) = enclosing(ctx, line, &[NodeKind::Method]) {
-                    out.sites.push(SiteFact { pass: PASS_REACT_RENDER, role: 0, key_kind: 2, key_a: String::new(), key_b: String::new(), node_row: row, line, payload: String::new() });
+                    out.sites.push(SiteFact {
+                        pass: PASS_REACT_RENDER,
+                        role: 0,
+                        key_kind: 2,
+                        key_a: String::new(),
+                        key_b: String::new(),
+                        node_row: row,
+                        line,
+                        payload: String::new(),
+                    });
                 }
             }
         }
@@ -125,7 +178,16 @@ impl FileHook for SiteScanner {
                 let line = line_of(src, m.get(0).unwrap().start());
                 let Some(row) = enclosing(ctx, line, &jsx_kinds) else { continue };
                 if seen.insert((row, name.clone())) {
-                    out.sites.push(SiteFact { pass: PASS_JSX, role: 0, key_kind: 0, key_a: name, key_b: String::new(), node_row: row, line, payload: String::new() });
+                    out.sites.push(SiteFact {
+                        pass: PASS_JSX,
+                        role: 0,
+                        key_kind: 0,
+                        key_a: name,
+                        key_b: String::new(),
+                        node_row: row,
+                        line,
+                        payload: String::new(),
+                    });
                 }
             }
         }

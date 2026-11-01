@@ -65,11 +65,7 @@ impl Draft {
     /// A copy sharing the (immutable) partitions; used to assemble a provisional delta for
     /// resolution and the final one from the same draft.
     pub fn duplicate(&self) -> Draft {
-        Draft {
-            seg: Seg::from_parts(self.seg.meta.clone(), self.seg.p.clone()),
-            edges: self.edges.clone(),
-            emeta: self.emeta.clone(),
-        }
+        Draft { seg: Seg::from_parts(self.seg.meta.clone(), self.seg.p.clone()), edges: self.edges.clone(), emeta: self.emeta.clone() }
     }
 }
 
@@ -328,12 +324,10 @@ pub fn build_draft_at(batches: &[FileBatch], delta: Option<(&[FileId], BuildBase
             row_by_id(map, rows, id?).map(|r| nstart + r)
         }
         for e in rows.edges() {
-            let (Some(src), Some(dst)) =
-                (
-                    endpoint(&mut id_to_row, &rows, kcount as u32, nstart, e.source_row(), e.source_id()),
-                    endpoint(&mut id_to_row, &rows, kcount as u32, nstart, e.target_row(), e.target_id()),
-                )
-            else {
+            let (Some(src), Some(dst)) = (
+                endpoint(&mut id_to_row, &rows, kcount as u32, nstart, e.source_row(), e.source_id()),
+                endpoint(&mut id_to_row, &rows, kcount as u32, nstart, e.target_row(), e.target_id()),
+            ) else {
                 continue;
             };
             if e.kind() == EdgeKind::Contains {
@@ -443,11 +437,8 @@ pub fn build_draft_at(batches: &[FileBatch], delta: Option<(&[FileId], BuildBase
             let from_row = r.from_row().filter(|x| *x < kcount as u32).or_else(|| row_by_id(&mut id_to_row, &rows, r.from_id()?));
             let from = nstart + from_row.unwrap_or(0);
             let name = r.name();
-            let tail_src: &str = if r.kind().edge_kind() == EdgeKind::Imports && import_specs.contains(name) {
-                arena.alloc(format!("module:{name}"))
-            } else {
-                tail_of(name)
-            };
+            let tail_src: &str =
+                if r.kind().edge_kind() == EdgeKind::Imports && import_specs.contains(name) { arena.alloc(format!("module:{name}")) } else { tail_of(name) };
             refs.push(RefRec {
                 from: NodeIdx(from),
                 name: StrId(text.intern(name)),
@@ -464,11 +455,7 @@ pub fn build_draft_at(batches: &[FileBatch], delta: Option<(&[FileId], BuildBase
         }
         for r in &b.extra_refs {
             let from = nstart + r.from_row.min(ncount as u32 - 1);
-            let tail_src: &str = if r.kind.edge_kind() == EdgeKind::Imports {
-                arena.alloc(format!("module:{}", r.name))
-            } else {
-                tail_of(&r.name)
-            };
+            let tail_src: &str = if r.kind.edge_kind() == EdgeKind::Imports { arena.alloc(format!("module:{}", r.name)) } else { tail_of(&r.name) };
             refs.push(RefRec {
                 from: NodeIdx(from),
                 name: StrId(text.intern(&r.name)),
@@ -484,11 +471,7 @@ pub fn build_draft_at(batches: &[FileBatch], delta: Option<(&[FileId], BuildBase
             });
         }
 
-        let errors = if b.errors.is_empty() {
-            StrId::NONE
-        } else {
-            StrId(text.intern(arena.alloc(serde_json::to_string(&b.errors).unwrap_or_default())))
-        };
+        let errors = if b.errors.is_empty() { StrId::NONE } else { StrId(text.intern(arena.alloc(serde_json::to_string(&b.errors).unwrap_or_default()))) };
         files.push(FileRec {
             path: StrId(path_t),
             lang: b.lang as u8,
@@ -570,8 +553,7 @@ pub fn build_draft_at(batches: &[FileBatch], delta: Option<(&[FileId], BuildBase
         st.key_b = text_map[st.key_b as usize] + bb.text;
         rt(&mut st.payload);
     });
-    let mut fname_idx: Vec<FileNameRec> =
-        fnames.iter().map(|(n, f)| FileNameRec { name: StrId(names_map[*n as usize]), file: FileId(*f) }).collect();
+    let mut fname_idx: Vec<FileNameRec> = fnames.iter().map(|(n, f)| FileNameRec { name: StrId(names_map[*n as usize]), file: FileId(*f) }).collect();
     fname_idx.par_sort_unstable_by_key(|r| (r.name.0, r.file.0));
     fname_idx.dedup();
 
@@ -589,9 +571,7 @@ pub fn build_draft_at(batches: &[FileBatch], delta: Option<(&[FileId], BuildBase
     }
 
     // ---- name postings (definitions only) ----
-    let skip = |k: u8| {
-        matches!(NodeKind::from_u8(k), Some(NodeKind::File | NodeKind::Import | NodeKind::Export | NodeKind::Parameter) | None)
-    };
+    let skip = |k: u8| matches!(NodeKind::from_u8(k), Some(NodeKind::File | NodeKind::Import | NodeKind::Export | NodeKind::Parameter) | None);
     let (name_post_off, name_post) = postings(names_pool.len(), &hot, bb, |h| StrId(h.name.0 - bb.names), &skip);
     let (qname_post_off, qname_post) = postings(names_pool.len(), &hot, bb, |h| StrId(h.qname.0 - bb.names), &skip);
 
@@ -656,13 +636,7 @@ pub fn build_draft_at(batches: &[FileBatch], delta: Option<(&[FileId], BuildBase
 }
 
 /// CSR of node indexes per string id (ascending node order).
-fn postings(
-    n_strings: usize,
-    hot: &[NodeHot],
-    bb: BuildBase,
-    key: impl Fn(&NodeHot) -> StrId,
-    skip: &impl Fn(u8) -> bool,
-) -> (Vec<u32>, Vec<u32>) {
+fn postings(n_strings: usize, hot: &[NodeHot], bb: BuildBase, key: impl Fn(&NodeHot) -> StrId, skip: &impl Fn(u8) -> bool) -> (Vec<u32>, Vec<u32>) {
     let mut off = vec![0u32; n_strings + 1];
     for h in hot {
         if !skip(h.kind) {

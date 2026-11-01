@@ -88,9 +88,8 @@ impl AgentTarget for ClaudeCode {
                 if req.hook {
                     let list = json::object_at(&root, &["hooks"]).array_value_or_set("UserPromptSubmit");
                     let present = list.elements().iter().any(|e| {
-                        e.to_serde_value().map_or(false, |v| {
-                            v["hooks"].as_array().map_or(false, |hs| hs.iter().any(|h| h["command"].as_str().map_or(false, is_our_hook)))
-                        })
+                        e.to_serde_value()
+                            .map_or(false, |v| v["hooks"].as_array().map_or(false, |hs| hs.iter().any(|h| h["command"].as_str().map_or(false, is_our_hook))))
                     });
                     if !present {
                         list.append(json::to_input(&json!({"hooks": [{"type": "command", "command": hook}]})));
@@ -99,9 +98,7 @@ impl AgentTarget for ClaudeCode {
                 Ok(Some(json::finish(&root, cur)))
             })?);
         }
-        out.push(edit_file(&p.md, req, "instruction block", false, |cur| {
-            Ok(Some(block::upsert(cur, &instruction_block_body())))
-        })?);
+        out.push(edit_file(&p.md, req, "instruction block", false, |cur| Ok(Some(block::upsert(cur, &instruction_block_body()))))?);
         Ok(out)
     }
 
@@ -136,7 +133,9 @@ impl AgentTarget for ClaudeCode {
             }
             if let Some(list) = root.object_value().and_then(|o| o.object_value("hooks")).and_then(|o| o.array_value("UserPromptSubmit")) {
                 for el in list.elements() {
-                    let ours = el.to_serde_value().map_or(false, |v| v["hooks"].as_array().map_or(false, |hs| hs.iter().any(|h| h["command"].as_str().map_or(false, is_our_hook))));
+                    let ours = el
+                        .to_serde_value()
+                        .map_or(false, |v| v["hooks"].as_array().map_or(false, |hs| hs.iter().any(|h| h["command"].as_str().map_or(false, is_our_hook))));
                     if ours {
                         el.remove();
                     }

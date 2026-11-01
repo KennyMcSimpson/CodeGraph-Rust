@@ -195,9 +195,7 @@ pub fn assemble_delta(base: &Seg, parts: DeltaParts) -> Seg {
     if indexes {
         let name_post_off = seg.p.name_post_off.clone();
         let qname_post_off = seg.p.qname_post_off.clone();
-        let ni = index::build_name_indexes(&seg.names, |i| {
-            name_post_off[i + 1] > name_post_off[i] || qname_post_off[i + 1] > qname_post_off[i]
-        });
+        let ni = index::build_name_indexes(&seg.names, |i| name_post_off[i + 1] > name_post_off[i] || qname_post_off[i + 1] > qname_post_off[i]);
         seg.p.names_fst = Part::owned(ni.names_fst);
         seg.p.lower_fst = Part::owned(ni.lower_fst);
         seg.p.lower_post_off = Part::owned(ni.lower_post_off);

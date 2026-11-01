@@ -21,8 +21,8 @@ use cg_resolve::driver::{make_edge, round_of, update_of, FNREF_META};
 use cg_resolve::{hooks_for, index_with_guard, resolve_refs, Engine, IndexOptions, Outcome, ProjectInfo, Round_};
 use cg_scan::{scan, ScanOptions};
 use cg_store::{
-    assemble_delta, base_offsets, build_draft_at, outkind, status, DeltaParts, DeltaState, EdgeBuild, EdgesOnlyFile, FileRec, ProjectMeta, RefRec,
-    RefUpdate, Seg, Store, View, WriteGuard,
+    assemble_delta, base_offsets, build_draft_at, outkind, status, DeltaParts, DeltaState, EdgeBuild, EdgesOnlyFile, FileRec, ProjectMeta, RefRec, RefUpdate,
+    Seg, Store, View, WriteGuard,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeMap, BTreeSet};
@@ -138,14 +138,12 @@ fn defs_of(view: &View, f: FileId) -> BTreeMap<DefKey, Vec<DefDetail>> {
         if !node.kind().is_definition() {
             continue;
         }
-        m.entry(DefKey { kind: node.kind() as u8, name: node.name().to_owned(), qname: node.qname().to_owned() })
-            .or_default()
-            .push(DefDetail {
-                flags: view.hot(n).flags,
-                ret: node.return_type().map(str::to_owned),
-                sig: node.signature().map(str::to_owned),
-                vis: node.visibility() as u8,
-            });
+        m.entry(DefKey { kind: node.kind() as u8, name: node.name().to_owned(), qname: node.qname().to_owned() }).or_default().push(DefDetail {
+            flags: view.hot(n).flags,
+            ret: node.return_type().map(str::to_owned),
+            sig: node.signature().map(str::to_owned),
+            vis: node.visibility() as u8,
+        });
     }
     m
 }
@@ -301,11 +299,8 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
     if let Some(t) = opts.index.threads {
         budget.threads = t.max(1);
     }
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(budget.threads)
-        .stack_size(16 << 20)
-        .build()
-        .map_err(|e| CgError::other(format!("thread pool: {e}")))?;
+    let pool =
+        rayon::ThreadPoolBuilder::new().num_threads(budget.threads).stack_size(16 << 20).build().map_err(|e| CgError::other(format!("thread pool: {e}")))?;
     let replaced_ids: FxHashMap<&str, FileId> = d.replaced.iter().map(|(f, e)| (e.rel.as_str(), *f)).collect();
     let mut entries: Vec<_> = d.replaced.iter().map(|x| x.1.clone()).chain(d.added.iter().cloned()).collect();
     entries.sort_by(|a, b| a.rel.as_bytes().cmp(b.rel.as_bytes()));
@@ -361,7 +356,8 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
 
     // ---- provisional delta -> resolution engine over the new state ----
     let bb = base_offsets(&base);
-    let meta = ProjectMeta { config_digest: base.meta.config_digest, frameworks: base.meta.frameworks.clone(), config_digests: base.meta.config_digests.clone() };
+    let meta =
+        ProjectMeta { config_digest: base.meta.config_digest, frameworks: base.meta.frameworks.clone(), config_digests: base.meta.config_digests.clone() };
     let draft = pool.install(|| build_draft_at(&batches, Some((&ids, bb)), &meta));
     drop(batches);
     let removed_recs: Vec<(FileId, FileRec)> = removed.iter().map(|f| (*f, base.p.files[f.idx()])).collect();
@@ -486,7 +482,9 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
                     }
                 };
                 let reexports = engine.stars[*g as usize].iter().any(|y| y.0 == x)
-                    || engine.exports[*g as usize].values().any(|e| matches!(e, cg_resolve::ExportEntry::Re(y, _) | cg_resolve::ExportEntry::Module(y) if y.0 == x))
+                    || engine.exports[*g as usize]
+                        .values()
+                        .any(|e| matches!(e, cg_resolve::ExportEntry::Re(y, _) | cg_resolve::ExportEntry::Module(y) if y.0 == x))
                     || base_reexports(*g, x);
                 if reexports && seen.insert(*g) {
                     frontier.push(*g);
@@ -563,7 +561,11 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
         }
     }
     if debug {
-        eprintln!("sync: files hit: imports {hit_imports}, tail {hit_tail}, dead {hit_dead}, consumers {hit_consumer}; remapped nodes {}; d_names {:?}", remap.len(), d_names);
+        eprintln!(
+            "sync: files hit: imports {hit_imports}, tail {hit_tail}, dead {hit_dead}, consumers {hit_consumer}; remapped nodes {}; d_names {:?}",
+            remap.len(),
+            d_names
+        );
     }
     // (the files' own refs of C files are in `affected` already via view1.ref_range)
 
@@ -661,7 +663,15 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
             }
         }
         let new_key = |e: &EdgeBuild| -> String {
-            format!("{}>{}|{}|{}|{}|{}", cg_store::dump::node_key(&view1, NodeIdx(e.src)), cg_store::dump::node_key(&view1, NodeIdx(e.dst)), e.kind, e.line, e.col, synth.emeta.get(e.meta as usize).map_or("", |m| m.as_str()))
+            format!(
+                "{}>{}|{}|{}|{}|{}",
+                cg_store::dump::node_key(&view1, NodeIdx(e.src)),
+                cg_store::dump::node_key(&view1, NodeIdx(e.dst)),
+                e.kind,
+                e.line,
+                e.col,
+                synth.emeta.get(e.meta as usize).map_or("", |m| m.as_str())
+            )
         };
         let mut files: BTreeSet<u32> = synth_by_file.keys().copied().collect();
         files.extend(base_synth.keys().copied());
@@ -703,7 +713,8 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
     }
 
     // ---- thresholds ----
-    let affected_base_files: BTreeSet<u32> = affected.iter().filter(|id| **id < n_base_refs).map(|id| file_of(*id).0).filter(|f| !c_files.contains(f)).collect();
+    let affected_base_files: BTreeSet<u32> =
+        affected.iter().filter(|id| **id < n_base_refs).map(|id| file_of(*id).0).filter(|f| !c_files.contains(f)).collect();
     rep.affected_refs = affected.len();
     rep.affected_files = affected_base_files.len() + ids.len();
     if affected.len() * 100 > (n_base_refs as usize).max(1) * MAX_AFFECTED_REF_PCT && n_base_refs > 2000 {
@@ -756,19 +767,19 @@ pub fn sync_locked(store: &Store, guard: &WriteGuard, root: &Path, opts: &SyncOp
             edges.push(e);
         }
     }
-    let ref_updates: Vec<RefUpdate> = (n_base_refs..n_base_refs + n_draft_refs).map(|id| update_of(&outcomes.get(&id).copied().unwrap_or(Outcome::PENDING))).collect();
+    let ref_updates: Vec<RefUpdate> =
+        (n_base_refs..n_base_refs + n_draft_refs).map(|id| update_of(&outcomes.get(&id).copied().unwrap_or(Outcome::PENDING))).collect();
     let import_targets: Vec<u32> = ids
         .iter()
-        .flat_map(|f| engine.imp_targets[f.idx()].iter().map(|t| match t {
-            cg_resolve::ImportTarget::File(tf) => tf.0,
-            _ => NONE,
-        }))
+        .flat_map(|f| {
+            engine.imp_targets[f.idx()].iter().map(|t| match t {
+                cg_resolve::ImportTarget::File(tf) => tf.0,
+                _ => NONE,
+            })
+        })
         .collect();
 
-    let export_targets: Vec<u32> = ids
-        .iter()
-        .flat_map(|f| view1.exports_of(*f).iter().map(|ex| engine.export_target(*f, ex)).collect::<Vec<_>>())
-        .collect();
+    let export_targets: Vec<u32> = ids.iter().flat_map(|f| view1.exports_of(*f).iter().map(|ex| engine.export_target(*f, ex)).collect::<Vec<_>>()).collect();
     let mut edges_only: Vec<EdgesOnlyFile> = Vec::new();
     for &f in &eo_set {
         let rec = base.p.files[f as usize];

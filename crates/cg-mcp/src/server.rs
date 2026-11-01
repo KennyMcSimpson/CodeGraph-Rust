@@ -327,7 +327,12 @@ impl Server {
         let env = ToolEnv { graph: &project.graph, history: if self.cfg.dedup { Some(history) } else { None }, status };
         let mut out = tools::call(&env, short, args);
         if !out.is_error && project.snap.manifest.engine_version != brand::ENGINE_VERSION && !noticed.swap(true, Ordering::SeqCst) {
-            out.text = format!("> Note: this index was built by an older {} engine. It still answers; `{} index` rebuilds it with the current resolver.\n\n{}", brand::PROJECT_NAME, brand::BIN_NAME, out.text);
+            out.text = format!(
+                "> Note: this index was built by an older {} engine. It still answers; `{} index` rebuilds it with the current resolver.\n\n{}",
+                brand::PROJECT_NAME,
+                brand::BIN_NAME,
+                out.text
+            );
         }
         out
     }

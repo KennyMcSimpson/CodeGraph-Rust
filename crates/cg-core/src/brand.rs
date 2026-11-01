@@ -38,9 +38,6 @@ pub mod env {
 
     /// `name` if set and non-empty, else `fallback`.
     pub fn get(name: &str, fallback: Option<&str>) -> Option<String> {
-        std::env::var(name)
-            .ok()
-            .filter(|v| !v.is_empty())
-            .or_else(|| fallback.and_then(|f| std::env::var(f).ok()).filter(|v| !v.is_empty()))
+        std::env::var(name).ok().filter(|v| !v.is_empty()).or_else(|| fallback.and_then(|f| std::env::var(f).ok()).filter(|v| !v.is_empty()))
     }
 }

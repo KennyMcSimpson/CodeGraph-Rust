@@ -14,8 +14,35 @@ use std::path::{Path, PathBuf};
 const MAX_OUTPUT: usize = 9_000;
 
 const STRUCTURAL: &[&str] = &[
-    "how does", "how do", "how is", "where is", "where are", "where does", "flow", "architecture", "who calls", "callers", "callees", "depends on",
-    "implement", "refactor", "trace", "explain", "what calls", "impact", "call path", "call chain", "walk me through", "怎么", "如何", "流程", "调用", "实现", "在哪", "架构", "影响",
+    "how does",
+    "how do",
+    "how is",
+    "where is",
+    "where are",
+    "where does",
+    "flow",
+    "architecture",
+    "who calls",
+    "callers",
+    "callees",
+    "depends on",
+    "implement",
+    "refactor",
+    "trace",
+    "explain",
+    "what calls",
+    "impact",
+    "call path",
+    "call chain",
+    "walk me through",
+    "怎么",
+    "如何",
+    "流程",
+    "调用",
+    "实现",
+    "在哪",
+    "架构",
+    "影响",
 ];
 
 fn strip_system_reminders(s: &str) -> String {
@@ -110,7 +137,10 @@ fn compute(prompt: &str, cwd: &Path) -> Option<String> {
         let opts = ExploreOptions { max_output: Some(MAX_OUTPUT - 400), ..Default::default() };
         let r = g.explore(&prompt, &opts);
         if r.symbols > 0 || r.found_named {
-            let note = format!("{} pre-fetched this for the prompt: verbatim source and call paths of the code it mentions. Treat the source as already Read.{hint}", brand::PROJECT_NAME);
+            let note = format!(
+                "{} pre-fetched this for the prompt: verbatim source and call paths of the code it mentions. Treat the source as already Read.{hint}",
+                brand::PROJECT_NAME
+            );
             return Some(format!("<codegraph_context note=\"{note}\">\n{}\n</codegraph_context>", r.text));
         }
     }
@@ -120,8 +150,12 @@ fn compute(prompt: &str, cwd: &Path) -> Option<String> {
         let hits = g.search_tokens(&plain, &SearchOptions { limit: 6, fuzzy: false, ..Default::default() });
         let hits: Vec<_> = hits.into_iter().filter(|h| h.score >= 45.0).collect();
         if !hits.is_empty() {
-            let list: Vec<String> = hits.iter().map(|h| format!("{} ({}, {}:{})", g.name(h.node), g.kind(h.node), g.node_path(h.node), g.line(h.node))).collect();
-            let note = format!("indexed symbols whose names match words in the prompt; call the {}explore tool with these names for their source.{hint}", brand::MCP_TOOL_PREFIX);
+            let list: Vec<String> =
+                hits.iter().map(|h| format!("{} ({}, {}:{})", g.name(h.node), g.kind(h.node), g.node_path(h.node), g.line(h.node))).collect();
+            let note = format!(
+                "indexed symbols whose names match words in the prompt; call the {}explore tool with these names for their source.{hint}",
+                brand::MCP_TOOL_PREFIX
+            );
             return Some(format!("<codegraph_context note=\"{note}\">\n{}\n</codegraph_context>", list.join("\n")));
         }
     }

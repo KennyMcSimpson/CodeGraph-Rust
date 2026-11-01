@@ -130,10 +130,7 @@ pub struct Facts {
 
 impl Facts {
     pub fn new(file_end: u64) -> Facts {
-        Facts {
-            scopes: vec![ScopeFact { kind: ScopeKind::File, parent: NONE, start: 0, end: file_end }],
-            ..Default::default()
-        }
+        Facts { scopes: vec![ScopeFact { kind: ScopeKind::File, parent: NONE, start: 0, end: file_end }], ..Default::default() }
     }
 
     /// Innermost scope containing `pos` (packed line/col).

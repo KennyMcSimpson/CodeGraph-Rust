@@ -45,9 +45,7 @@ fn cmp(a: &EdgeBuild, b: &EdgeBuild) -> Ordering {
 /// Sort and deduplicate `edges` in place and build the CSR arrays for `n_nodes` nodes.
 pub fn assemble(edges: &mut Vec<EdgeBuild>, n_nodes: usize) -> EdgeAsm {
     edges.par_sort_unstable_by(cmp);
-    edges.dedup_by(|b, a| {
-        a.src == b.src && a.dst == b.dst && (a.kind & 0x0F) == (b.kind & 0x0F) && a.line == b.line && a.col == b.col
-    });
+    edges.dedup_by(|b, a| a.src == b.src && a.dst == b.dst && (a.kind & 0x0F) == (b.kind & 0x0F) && a.line == b.line && a.col == b.col);
     let m = edges.len();
     let mut out_off = vec![0u32; n_nodes + 1];
     for e in edges.iter() {
@@ -106,9 +104,7 @@ pub struct SparseAsm {
 /// (`d_src_nodes`) and, for the reverse side, of destination nodes (`d_dst_nodes`).
 pub fn assemble_sparse(edges: &mut Vec<EdgeBuild>) -> SparseAsm {
     edges.par_sort_unstable_by(cmp);
-    edges.dedup_by(|b, a| {
-        a.src == b.src && a.dst == b.dst && (a.kind & 0x0F) == (b.kind & 0x0F) && a.line == b.line && a.col == b.col
-    });
+    edges.dedup_by(|b, a| a.src == b.src && a.dst == b.dst && (a.kind & 0x0F) == (b.kind & 0x0F) && a.line == b.line && a.col == b.col);
     let m = edges.len();
     let mut src_nodes: Vec<u32> = Vec::new();
     let mut out_off: Vec<u32> = vec![0];
@@ -191,17 +187,7 @@ mod tests {
     use cg_core::{EdgeKind, Provenance, NONE};
 
     fn e(src: u32, dst: u32, kind: EdgeKind, class: u8, line: u32) -> EdgeBuild {
-        EdgeBuild {
-            src,
-            dst,
-            kind: outkind::pack(kind, Provenance::TreeSitter, class),
-            line,
-            col: 0,
-            res: 0,
-            ref_idx: NONE,
-            meta: NONE,
-            order: 0,
-        }
+        EdgeBuild { src, dst, kind: outkind::pack(kind, Provenance::TreeSitter, class), line, col: 0, res: 0, ref_idx: NONE, meta: NONE, order: 0 }
     }
 
     #[test]

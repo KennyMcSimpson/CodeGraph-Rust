@@ -59,8 +59,8 @@ pub struct QueryToken {
 }
 
 const FILE_EXTS: &[&str] = &[
-    "ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts", "py", "pyi", "go", "java", "kt", "kts", "rs", "c", "h", "cc", "cpp", "hpp", "cs",
-    "php", "rb", "swift", "dart", "scala", "lua", "r", "json", "toml", "yaml", "yml", "md", "vue", "svelte", "gradle", "xml", "sql", "sh",
+    "ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts", "py", "pyi", "go", "java", "kt", "kts", "rs", "c", "h", "cc", "cpp", "hpp", "cs", "php", "rb",
+    "swift", "dart", "scala", "lua", "r", "json", "toml", "yaml", "yml", "md", "vue", "svelte", "gradle", "xml", "sql", "sh",
 ];
 
 fn is_ident_char(c: char) -> bool {
@@ -80,7 +80,9 @@ fn has_file_ext(s: &str) -> bool {
 /// 200 words survive.
 pub fn tokenize_query(q: &str) -> Vec<QueryToken> {
     let long = q.len() > 10_000;
-    let separators = |c: char| c.is_whitespace() || matches!(c, ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | '"' | '\'' | '`' | '|' | '=' | '+' | '*' | '?' | '!');
+    let separators = |c: char| {
+        c.is_whitespace() || matches!(c, ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | '"' | '\'' | '`' | '|' | '=' | '+' | '*' | '?' | '!')
+    };
     let mut out: Vec<QueryToken> = Vec::new();
     let mut seen: FxHashSet<(String, TokKind)> = FxHashSet::default();
     let mut words = 0usize;
@@ -107,11 +109,7 @@ pub fn tokenize_query(q: &str) -> Vec<QueryToken> {
         let tok = if t.contains('/') || (has_file_ext(&t) && !t.contains("::")) {
             QueryToken { lower: t.to_lowercase(), raw: t, kind: TokKind::Path, parts: Vec::new(), anchor }
         } else if t.contains("::") || (t.contains('.') && t.split('.').filter(|p| !p.is_empty()).count() >= 2) {
-            let parts: Vec<String> = t
-                .split(|c| c == '.' || c == ':')
-                .filter(|p| !p.is_empty())
-                .map(|p| p.to_owned())
-                .collect();
+            let parts: Vec<String> = t.split(|c| c == '.' || c == ':').filter(|p| !p.is_empty()).map(|p| p.to_owned()).collect();
             if parts.len() < 2
                 || !parts.iter().all(|p| p.chars().all(is_ident_char) && p.chars().next().map_or(false, |c| c.is_alphabetic() || c == '_' || c == '$'))
                 || parts.iter().all(|p| p.len() < 2)
@@ -458,7 +456,9 @@ impl Graph {
                 // file named after the word (`Cache` -> cache.rs / Cache.java)
                 for cand in [t.raw.clone(), capitalize(&t.raw), t.lower.clone()] {
                     for f in self.files_matching(&cand) {
-                        if !cand.contains('/') && self.path(f).rsplit('/').next().map_or(false, |b| b == cand || b.rsplit_once('.').map_or(false, |x| x.0 == cand)) {
+                        if !cand.contains('/')
+                            && self.path(f).rsplit('/').next().map_or(false, |b| b == cand || b.rsplit_once('.').map_or(false, |x| x.0 == cand))
+                        {
                             acc.add(slot, self.file_node(f), if t.kind == TokKind::Code { 80.0 } else { 55.0 });
                         }
                     }
@@ -533,7 +533,13 @@ impl Graph {
                         let name_len = key.len();
                         self.nodes_of_name_in(seg, d, id, |n| {
                             let k = self.kind(n);
-                            let base = if k.is_type() { 58.0 } else if k.is_callable() { 38.0 } else { 30.0 };
+                            let base = if k.is_type() {
+                                58.0
+                            } else if k.is_callable() {
+                                38.0
+                            } else {
+                                30.0
+                            };
                             let short = 1.0 / (1.0 + 0.02 * name_len.saturating_sub(prefix.len()) as f32);
                             acc.add(slot, n, base * short * scale);
                         });
@@ -716,7 +722,15 @@ impl Graph {
 
 fn kind_weight(k: NodeKind) -> f32 {
     match k {
-        NodeKind::Class | NodeKind::Interface | NodeKind::Struct | NodeKind::Trait | NodeKind::Function | NodeKind::Method | NodeKind::Route | NodeKind::Component | NodeKind::Enum => 1.0,
+        NodeKind::Class
+        | NodeKind::Interface
+        | NodeKind::Struct
+        | NodeKind::Trait
+        | NodeKind::Function
+        | NodeKind::Method
+        | NodeKind::Route
+        | NodeKind::Component
+        | NodeKind::Enum => 1.0,
         NodeKind::File => 0.9,
         NodeKind::Module | NodeKind::Namespace | NodeKind::TypeAlias | NodeKind::Protocol | NodeKind::Union => 0.95,
         NodeKind::Constant => 0.85,

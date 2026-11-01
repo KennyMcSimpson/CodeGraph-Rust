@@ -157,11 +157,8 @@ pub fn budget_note(file_count: usize, calls: u32) -> String {
 pub fn not_in_index_note(names: &[String], with_results: bool) -> String {
     let one = names.len() == 1;
     let list = names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
-    let effect = if with_results {
-        format!(", so the code below matches the query's other words, not {}.", if one { "it" } else { "them" })
-    } else {
-        ".".to_owned()
-    };
+    let effect =
+        if with_results { format!(", so the code below matches the query's other words, not {}.", if one { "it" } else { "them" }) } else { ".".to_owned() };
     format!(
         "> **Not in the index:** {list}. No indexed symbol, file, signature or comment uses {}{effect} If {} defined in this project, the file{} defining {} {} not indexed: `{} status` shows what is. If {} in a folder skipped by default, like `build/` or `dist/`, the user can include that folder by adding a re-include such as `!/build/` to `.gitignore`.",
         if one { "this name" } else { "these names" },

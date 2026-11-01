@@ -85,7 +85,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let env = Env { home: dir.path().into(), cwd: dir.path().into(), claude_config_dir: None, codex_home: None };
         std::fs::create_dir_all(dir.path().join(".cursor")).unwrap();
-        std::fs::write(dir.path().join(".cursor/mcp.json"), "{\"mcpServers\":{\"codegraph-rust\":{\"command\":\"/mine\",\"args\":[\"serve\",\"--mcp\"]}}}").unwrap();
+        std::fs::write(dir.path().join(".cursor/mcp.json"), "{\"mcpServers\":{\"codegraph-rust\":{\"command\":\"/mine\",\"args\":[\"serve\",\"--mcp\"]}}}")
+            .unwrap();
         let req = Request { bin: "/opt/cgr".into(), local: false, project: dir.path().into(), hook: false, permissions: false, dry_run: false };
         Cursor.install(&env, &req).unwrap();
         let text = std::fs::read_to_string(dir.path().join(".cursor/mcp.json")).unwrap();

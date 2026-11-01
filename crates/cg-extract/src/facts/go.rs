@@ -56,10 +56,7 @@ fn walk(cx: &mut Cx, n: Node, scope: u32) {
             let names: Vec<Node> = kids(n).filter(|c| c.kind() == "identifier").collect();
             let value = n.child_by_field_name("value");
             for (i, nm) in names.iter().enumerate() {
-                let (vt, init) = value
-                    .and_then(|v| v.named_child(i))
-                    .map(|e| value_info(cx, e))
-                    .unwrap_or_default();
+                let (vt, init) = value.and_then(|v| v.named_child(i)).map(|e| value_info(cx, e)).unwrap_or_default();
                 let text = cx.text(*nm).to_owned();
                 let line = cx.line(*nm);
                 let decl = ty.clone().filter(|t| !t.is_empty()).unwrap_or(vt);
@@ -128,7 +125,11 @@ fn bind_pairs(cx: &mut Cx, left: Node, right: Option<Node>, _ty: Option<&str>, s
         let line = cx.line(*l);
         let rv = right.and_then(|r| {
             let items: Vec<Node> = kids(r).filter(|c| c.is_named()).collect();
-            if items.is_empty() { Some(r) } else { items.get(i).copied().or_else(|| items.first().copied().filter(|_| items.len() == 1)) }
+            if items.is_empty() {
+                Some(r)
+            } else {
+                items.get(i).copied().or_else(|| items.first().copied().filter(|_| items.len() == 1))
+            }
         });
         match rv {
             Some(v) if v.kind() == "func_literal" => cx.add_binding(scope, &nm, BindKind::LocalFn, "", "", line),

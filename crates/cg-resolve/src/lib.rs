@@ -13,7 +13,7 @@ pub use shape::{parse_shape, Shape};
 pub mod resolve;
 pub use resolve::{by, Accept, FileCx, NameRes, Outcome, TypeRes, WorkerCx};
 pub mod driver;
-pub use driver::{resolve_all, resolve_refs, round_of, Round_, ResolveOutput};
+pub use driver::{resolve_all, resolve_refs, round_of, ResolveOutput, Round_};
 pub mod frameworks;
 pub mod index;
 pub mod synth;

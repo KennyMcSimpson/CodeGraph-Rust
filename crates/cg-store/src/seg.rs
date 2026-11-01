@@ -205,10 +205,7 @@ impl Seg {
         }
         let version = u32::from_le_bytes(b[4..8].try_into().unwrap());
         if version != cg_core::brand::FORMAT_VERSION {
-            return Err(CgError::Version(format!(
-                "segment format {version}, this build reads {}",
-                cg_core::brand::FORMAT_VERSION
-            )));
+            return Err(CgError::Version(format!("segment format {version}, this build reads {}", cg_core::brand::FORMAT_VERSION)));
         }
         let count = u32::from_le_bytes(b[8..12].try_into().unwrap()) as usize;
         let file_len = u64::from_le_bytes(b[16..24].try_into().unwrap());
@@ -235,11 +232,8 @@ impl Seg {
             by_id.insert(e.id, e);
         }
         let p = SegParts::read(&map, &by_id)?;
-        let meta: SegMeta = if p.meta.is_empty() {
-            SegMeta::default()
-        } else {
-            serde_json::from_slice(&p.meta).map_err(|e| CgError::corrupt(format!("segment meta: {e}")))?
-        };
+        let meta: SegMeta =
+            if p.meta.is_empty() { SegMeta::default() } else { serde_json::from_slice(&p.meta).map_err(|e| CgError::corrupt(format!("segment meta: {e}")))? };
         let mut seg = Seg::from_parts(meta, p);
         seg.dir = dir;
         seg.file_len = file_len;
@@ -283,14 +277,7 @@ impl Seg {
         let mut dir = Vec::with_capacity(parts.len());
         for (id, elem, bytes, count) in &parts {
             let offset = align8(cur);
-            dir.push(DirEntry {
-                id: *id,
-                elem: *elem,
-                offset: offset as u64,
-                bytes: bytes.len() as u64,
-                count: *count,
-                checksum: hash::hash64(bytes),
-            });
+            dir.push(DirEntry { id: *id, elem: *elem, offset: offset as u64, bytes: bytes.len() as u64, count: *count, checksum: hash::hash64(bytes) });
             cur = offset + bytes.len();
         }
         let total = align8(cur);

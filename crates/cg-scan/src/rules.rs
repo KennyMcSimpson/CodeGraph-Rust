@@ -15,26 +15,76 @@ use std::sync::{Arc, Mutex};
 
 /// Directory names skipped everywhere (upstream `DEFAULT_IGNORE_DIRS`).
 pub const DEFAULT_IGNORE_DIRS: &[&str] = &[
-    "node_modules", "bower_components", "jspm_packages", "web_modules", ".yarn", ".pnpm-store",
-    ".next", ".nuxt", ".svelte-kit", ".turbo", ".vite", ".parcel-cache", ".angular", ".docusaurus",
-    "storybook-static", ".vinxi", ".nitro", "out-tsc", ".vercel", ".netlify", ".wrangler", "dist",
-    "build", "out", ".output", "coverage", ".nyc_output", "__pycache__", "__pypackages__", ".venv",
-    "venv", ".pixi", ".pdm-build", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".nox",
-    ".hypothesis", ".ipynb_checkpoints", ".eggs", "target", ".gradle", "obj", "vendor", ".build",
-    "Pods", "Carthage", "DerivedData", ".swiftpm", ".dart_tool", ".pub-cache", ".cxx",
-    ".externalNativeBuild", "vcpkg_installed", ".bloop", ".metals", "lua_modules", ".luarocks",
-    "__history", "__recovery", ".cache",
+    "node_modules",
+    "bower_components",
+    "jspm_packages",
+    "web_modules",
+    ".yarn",
+    ".pnpm-store",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".turbo",
+    ".vite",
+    ".parcel-cache",
+    ".angular",
+    ".docusaurus",
+    "storybook-static",
+    ".vinxi",
+    ".nitro",
+    "out-tsc",
+    ".vercel",
+    ".netlify",
+    ".wrangler",
+    "dist",
+    "build",
+    "out",
+    ".output",
+    "coverage",
+    ".nyc_output",
+    "__pycache__",
+    "__pypackages__",
+    ".venv",
+    "venv",
+    ".pixi",
+    ".pdm-build",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".nox",
+    ".hypothesis",
+    ".ipynb_checkpoints",
+    ".eggs",
+    "target",
+    ".gradle",
+    "obj",
+    "vendor",
+    ".build",
+    "Pods",
+    "Carthage",
+    "DerivedData",
+    ".swiftpm",
+    ".dart_tool",
+    ".pub-cache",
+    ".cxx",
+    ".externalNativeBuild",
+    "vcpkg_installed",
+    ".bloop",
+    ".metals",
+    "lua_modules",
+    ".luarocks",
+    "__history",
+    "__recovery",
+    ".cache",
 ];
 
 /// Android resource types whose directories hold XML, not code (upstream `ANDROID_RES_TYPES`).
-pub const ANDROID_RES_TYPES: &[&str] = &[
-    "anim", "animator", "color", "drawable", "font", "layout", "menu", "mipmap", "navigation",
-    "transition", "values", "xml",
-];
+pub const ANDROID_RES_TYPES: &[&str] =
+    &["anim", "animator", "color", "drawable", "font", "layout", "menu", "mipmap", "navigation", "transition", "values", "xml"];
 
 /// `build` is a legal JVM package segment under a conventional source root (#1642).
-pub const JVM_BUILD_PACKAGE_DIRS: &[&str] =
-    &["**/src/*/java/**/build/", "**/src/*/kotlin/**/build/", "**/src/*/scala/**/build/"];
+pub const JVM_BUILD_PACKAGE_DIRS: &[&str] = &["**/src/*/java/**/build/", "**/src/*/kotlin/**/build/", "**/src/*/scala/**/build/"];
 
 fn default_patterns() -> Vec<String> {
     let mut v: Vec<String> = DEFAULT_IGNORE_DIRS.iter().map(|d| format!("{d}/")).collect();
@@ -53,13 +103,10 @@ fn default_patterns() -> Vec<String> {
 /// `HAND_WRITTEN_SOURCE`): TypeScript, JSX, Vue/Svelte/Astro, Go, C#, Rust.
 pub fn is_hand_written_source(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
-    if lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts") || lower.ends_with(".d.ets")
-    {
+    if lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts") || lower.ends_with(".d.ets") {
         return false;
     }
-    [".ts", ".mts", ".cts", ".tsx", ".ets", ".jsx", ".vue", ".svelte", ".astro", ".go", ".cs", ".rs"]
-        .iter()
-        .any(|e| lower.ends_with(e))
+    [".ts", ".mts", ".cts", ".tsx", ".ets", ".jsx", ".vue", ".svelte", ".astro", ".go", ".cs", ".rs"].iter().any(|e| lower.ends_with(e))
 }
 
 pub struct IgnoreRules {
@@ -84,25 +131,14 @@ fn build(root: &Path, patterns: &[String]) -> Gitignore {
 }
 
 fn global_excludes_file() -> Option<PathBuf> {
-    if let Some(out) = std::process::Command::new("git")
-        .args(["config", "--global", "core.excludesFile"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-    {
+    if let Some(out) = std::process::Command::new("git").args(["config", "--global", "core.excludesFile"]).output().ok().filter(|o| o.status.success()) {
         let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !s.is_empty() {
-            let p = if let Some(rest) = s.strip_prefix("~/") {
-                PathBuf::from(std::env::var_os("HOME")?).join(rest)
-            } else {
-                PathBuf::from(s)
-            };
+            let p = if let Some(rest) = s.strip_prefix("~/") { PathBuf::from(std::env::var_os("HOME")?).join(rest) } else { PathBuf::from(s) };
             return Some(p);
         }
     }
-    let xdg = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
     Some(xdg.join("git").join("ignore"))
 }
 
@@ -130,10 +166,7 @@ impl IgnoreRules {
             exclude: build(root, &cfg.exclude),
             include: build(root, &cfg.include),
             has_include: !cfg.include.is_empty(),
-            jvm_build: build(
-                root,
-                &JVM_BUILD_PACKAGE_DIRS.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-            ),
+            jvm_build: build(root, &JVM_BUILD_PACKAGE_DIRS.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
             base_user,
             nested: Mutex::new(HashMap::new()),
         }
@@ -203,9 +236,7 @@ impl IgnoreRules {
         }
         let user = self.user_state(rel, is_dir);
         match user {
-            Some(true) => {
-                !(self.has_include && self.include.matched(self.root.join(rel), is_dir).is_ignore())
-            }
+            Some(true) => !(self.has_include && self.include.matched(self.root.join(rel), is_dir).is_ignore()),
             Some(false) => false, // explicitly revived, also revives built-in skips
             None => self.default_state(rel, is_dir) == Some(true),
         }
@@ -345,11 +376,7 @@ mod tests {
 
     #[test]
     fn config_exclude_and_include() {
-        let cfg = ProjectConfig {
-            exclude: vec!["static/".into()],
-            include: vec!["Tools/".into()],
-            ..Default::default()
-        };
+        let cfg = ProjectConfig { exclude: vec!["static/".into()], include: vec!["Tools/".into()], ..Default::default() };
         let (_d, r) = rules(&[(".gitignore", "Tools/\n")], cfg);
         assert!(r.is_ignored("static/a.js", false));
         assert!(!r.is_ignored("Tools/a.ts", false), "include revives a gitignored path");

@@ -183,12 +183,9 @@ const BIG_STACK_BYTES: usize = 512 << 20;
 
 fn run_kernel_big_stack(rel: &str, src: &str, lang: Lang, cfg: &ExtractConfig) -> KernelOutcome {
     let _g = BIG_STACK.lock().unwrap_or_else(|e| e.into_inner());
-    std::thread::scope(|s| {
-        match std::thread::Builder::new().stack_size(BIG_STACK_BYTES).spawn_scoped(s, || run_kernel(rel, src, lang, cfg))
-        {
-            Ok(h) => h.join().unwrap_or_else(|_| KernelOutcome::Failed("panic in big-stack retry".into())),
-            Err(e) => KernelOutcome::Failed(format!("cannot spawn big-stack thread: {e}")),
-        }
+    std::thread::scope(|s| match std::thread::Builder::new().stack_size(BIG_STACK_BYTES).spawn_scoped(s, || run_kernel(rel, src, lang, cfg)) {
+        Ok(h) => h.join().unwrap_or_else(|_| KernelOutcome::Failed("panic in big-stack retry".into())),
+        Err(e) => KernelOutcome::Failed(format!("cannot spawn big-stack thread: {e}")),
     })
 }
 
@@ -287,20 +284,7 @@ pub fn extract_bytes(rel: &str, bytes: &[u8], mtime_ns: i64, lang_hint: Lang, cf
             }
         }
     }
-    FileBatch {
-        rel: rel.to_owned(),
-        lang,
-        size: bytes.len() as u32,
-        mtime_ns,
-        hash: h,
-        flags,
-        emit,
-        extra_nodes,
-        extra_refs,
-        sites,
-        facts,
-        errors,
-    }
+    FileBatch { rel: rel.to_owned(), lang, size: bytes.len() as u32, mtime_ns, hash: h, flags, emit, extra_nodes, extra_refs, sites, facts, errors }
 }
 
 fn build_pool(cfg: &ExtractConfig) -> rayon::ThreadPool {
@@ -340,8 +324,7 @@ pub fn extract_stream(entries: &[FileEntry], cfg: &ExtractConfig, mut sink: impl
             bytes += entries[end].size;
             end += 1;
         }
-        let results: Vec<Option<FileBatch>> =
-            pool.install(|| entries[start..end].par_iter().map(|e| extract_one(e, cfg)).collect());
+        let results: Vec<Option<FileBatch>> = pool.install(|| entries[start..end].par_iter().map(|e| extract_one(e, cfg)).collect());
         for (i, r) in results.into_iter().enumerate() {
             sink(start + i, r);
         }
@@ -355,4 +338,3 @@ pub fn extract_all(entries: &[FileEntry], cfg: &ExtractConfig) -> Vec<Option<Fil
     extract_stream(entries, cfg, |_, b| out.push(b));
     out
 }
-

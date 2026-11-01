@@ -21,7 +21,14 @@ pub fn is_synth(e: &EdgeRef) -> bool {
 pub fn is_dependency_edge(e: &EdgeRef) -> bool {
     matches!(
         e.kind,
-        EdgeKind::Calls | EdgeKind::Instantiates | EdgeKind::References | EdgeKind::Extends | EdgeKind::Implements | EdgeKind::Imports | EdgeKind::Overrides | EdgeKind::Navigates
+        EdgeKind::Calls
+            | EdgeKind::Instantiates
+            | EdgeKind::References
+            | EdgeKind::Extends
+            | EdgeKind::Implements
+            | EdgeKind::Imports
+            | EdgeKind::Overrides
+            | EdgeKind::Navigates
     )
 }
 
@@ -138,10 +145,7 @@ impl Graph {
             frontier = next;
         }
         out.sort_by(|a, b| {
-            a.depth
-                .cmp(&b.depth)
-                .then_with(|| self.node_path(a.node).cmp(self.node_path(b.node)))
-                .then_with(|| self.line(a.node).cmp(&self.line(b.node)))
+            a.depth.cmp(&b.depth).then_with(|| self.node_path(a.node).cmp(self.node_path(b.node))).then_with(|| self.line(a.node).cmp(&self.line(b.node)))
         });
         out.truncate(limit);
         out

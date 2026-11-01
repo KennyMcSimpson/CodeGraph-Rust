@@ -133,9 +133,7 @@ enum Cmd {
         depth: u32,
     },
     /// Implementations / subtypes of an interface, abstract class or method
-    Implementations {
-        symbol: String,
-    },
+    Implementations { symbol: String },
     /// Test files affected by changes to the given files
     Affected {
         files: Vec<String>,
@@ -352,7 +350,9 @@ fn run(cli: Cli) -> Result<i32> {
         Cmd::Affected { files, stdin, depth, filter, json, quiet } => cmds::affected(base, files, stdin, depth, filter, json, quiet),
         Cmd::Cycles { path, json } => cmds::cycles(path.or(base), json),
         Cmd::Serve { mcp: _, http, token, no_watch } => cmds::serve(base, http, token, no_watch),
-        Cmd::Install { agents, local, no_hook, no_permissions, dry_run, bin } => cmds::install(base, agents, local, !no_hook, !no_permissions, dry_run, bin, true),
+        Cmd::Install { agents, local, no_hook, no_permissions, dry_run, bin } => {
+            cmds::install(base, agents, local, !no_hook, !no_permissions, dry_run, bin, true)
+        }
         Cmd::Uninstall { agents, local, dry_run, bin } => cmds::install(base, agents, local, true, true, dry_run, bin, false),
         Cmd::Uninit { path, yes } => cmds::uninit(path.or(base), yes),
         Cmd::PromptHook => Ok(hook::run()),
@@ -369,8 +369,12 @@ fn run(cli: Cli) -> Result<i32> {
         Cmd::Debug(DebugCmd::Dump) => cmds::debug_dump(base),
         Cmd::Debug(DebugCmd::Unresolved) => cmds::debug_unresolved(base),
         Cmd::Debug(DebugCmd::Diff { path, limit }) => cmds::debug_diff(path.or(base), limit),
-        Cmd::Bench(BenchCmd::Index { path, runs, threads, with_readers, queries, json }) => bench::index(path.or(base), runs, threads, with_readers, queries, json),
-        Cmd::Bench(BenchCmd::Sync { path, edits, seed, in_place, verify, verbose, json }) => bench::sync(path.or(base), edits, seed, in_place, verify, verbose, json),
+        Cmd::Bench(BenchCmd::Index { path, runs, threads, with_readers, queries, json }) => {
+            bench::index(path.or(base), runs, threads, with_readers, queries, json)
+        }
+        Cmd::Bench(BenchCmd::Sync { path, edits, seed, in_place, verify, verbose, json }) => {
+            bench::sync(path.or(base), edits, seed, in_place, verify, verbose, json)
+        }
         Cmd::Bench(BenchCmd::Explore { path, queries, count, runs, seed, json }) => bench::explore(path.or(base), queries, count, runs, seed, json),
     }
 }

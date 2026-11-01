@@ -23,8 +23,7 @@ fn walk(cx: &mut Cx, n: Node, scope: u32) {
             }
         }
         "import_declaration" => import(cx, n, scope),
-        "class_declaration" | "interface_declaration" | "enum_declaration" | "record_declaration"
-        | "annotation_type_declaration" => class(cx, n, scope),
+        "class_declaration" | "interface_declaration" | "enum_declaration" | "record_declaration" | "annotation_type_declaration" => class(cx, n, scope),
         "method_declaration" | "constructor_declaration" | "compact_constructor_declaration" => function(cx, n, scope),
         "lambda_expression" => lambda(cx, n, scope),
         "local_variable_declaration" => {
@@ -51,7 +50,10 @@ fn walk(cx: &mut Cx, n: Node, scope: u32) {
         }
         "type_pattern" | "record_pattern" => {
             // `x instanceof Foo f`
-            let ty = kids(n).find(|c| matches!(c.kind(), "type_identifier" | "scoped_type_identifier" | "generic_type")).map(|t| java_type_name(cx, t)).unwrap_or_default();
+            let ty = kids(n)
+                .find(|c| matches!(c.kind(), "type_identifier" | "scoped_type_identifier" | "generic_type"))
+                .map(|t| java_type_name(cx, t))
+                .unwrap_or_default();
             if let Some(nm) = kids(n).find(|c| c.kind() == "identifier") {
                 let t = cx.text(nm).to_owned();
                 let line = cx.line(nm);
@@ -216,7 +218,11 @@ fn lambda(cx: &mut Cx, n: Node, scope: u32) {
                         _ => None,
                     };
                     if let Some(nm) = nm {
-                        let ty = if i.kind() == "formal_parameter" { i.child_by_field_name("type").map(|t| java_type_name(cx, t)).unwrap_or_default() } else { String::new() };
+                        let ty = if i.kind() == "formal_parameter" {
+                            i.child_by_field_name("type").map(|t| java_type_name(cx, t)).unwrap_or_default()
+                        } else {
+                            String::new()
+                        };
                         let t = cx.text(nm).to_owned();
                         let line = cx.line(nm);
                         cx.add_binding(sc, &t, BindKind::Param, &ty, "", line);

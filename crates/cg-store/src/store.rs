@@ -155,9 +155,7 @@ impl Store {
 
     pub fn read_manifest(&self) -> Result<Option<Manifest>> {
         match std::fs::read(self.manifest_path()) {
-            Ok(b) => serde_json::from_slice(&b)
-                .map(Some)
-                .map_err(|e| CgError::corrupt(format!("manifest: {e}"))),
+            Ok(b) => serde_json::from_slice(&b).map(Some).map_err(|e| CgError::corrupt(format!("manifest: {e}"))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }

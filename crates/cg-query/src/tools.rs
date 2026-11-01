@@ -94,11 +94,7 @@ fn handle_explore(env: &ToolEnv<'_>, args: &Value) -> ToolOutput {
     let Some(query) = str_arg(args, "query") else {
         return ToolOutput::err("Error: query must be a non-empty string");
     };
-    let opts = ExploreOptions {
-        max_files: num_arg(args, "maxFiles").map(|n| clamp(n, 1.0, 20.0)),
-        max_output: None,
-        history: env.history.clone(),
-    };
+    let opts = ExploreOptions { max_files: num_arg(args, "maxFiles").map(|n| clamp(n, 1.0, 20.0)), max_output: None, history: env.history.clone() };
     let r = env.graph.explore(query, &opts);
     ToolOutput::ok(r.text)
 }
@@ -120,7 +116,11 @@ fn handle_search(env: &ToolEnv<'_>, args: &Value) -> ToolOutput {
     let mut hits = g.search(query, &SearchOptions { limit, kinds, ..Default::default() });
     if hits.is_empty() {
         let suggest = g.suggest_names(query, 5);
-        let tail = if suggest.is_empty() { String::new() } else { format!("\n\nDid you mean: {}", suggest.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ")) };
+        let tail = if suggest.is_empty() {
+            String::new()
+        } else {
+            format!("\n\nDid you mean: {}", suggest.iter().map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", "))
+        };
         return ToolOutput::ok(format!("No results found for \"{query}\"{tail}"));
     }
     hits.sort_by_key(|h| g.is_generated_file(g.view.hot(h.node).file));
@@ -251,7 +251,8 @@ fn handle_callers(env: &ToolEnv<'_>, args: &Value, callers: bool) -> ToolOutput 
         if rows.is_empty() {
             return ToolOutput::ok(format!("No {what} found for \"{symbol}\"{filter_note}"));
         }
-        let cut = if rows.len() > limit { format!("\n\n> Showing {limit} of {} {what}; pass `limit` (up to 100) to widen.", rows.len()) } else { String::new() };
+        let cut =
+            if rows.len() > limit { format!("\n\n> Showing {limit} of {} {what}; pass `limit` (up to 100) to widen.", rows.len()) } else { String::new() };
         let mut lines = vec![format!("**{title} {symbol} ({} found)**", rows.len().min(limit)), String::new()];
         lines.extend(rows.into_iter().take(limit));
         return ToolOutput::ok(truncate_output(lines.join("\n") + &cut + &filter_note));
@@ -278,7 +279,10 @@ fn handle_callers(env: &ToolEnv<'_>, args: &Value, callers: bool) -> ToolOutput 
 fn format_impact(g: &Graph, label: &str, root: NodeIdx, imp: &crate::traverse::Impact) -> String {
     let mut nodes: Vec<NodeIdx> = vec![root];
     nodes.extend(imp.nodes.iter().map(|x| x.0));
-    let mut lines = vec![format!("**Impact: \"{label}\" affects {} symbols{}**", nodes.len(), if imp.truncated { " (truncated at safety limit)" } else { "" }), String::new()];
+    let mut lines = vec![
+        format!("**Impact: \"{label}\" affects {} symbols{}**", nodes.len(), if imp.truncated { " (truncated at safety limit)" } else { "" }),
+        String::new(),
+    ];
     if imp.truncated {
         lines.push("> Result truncated to protect the MCP process on a high-fanout graph. Narrow with `file` or reduce `depth`.".into());
         lines.push(String::new());
@@ -386,7 +390,8 @@ fn handle_node(env: &ToolEnv<'_>, args: &Value) -> ToolOutput {
         let mut narrowed = matches.clone();
         if let Some(f) = file_hint {
             let f = f.replace('\\', "/").to_lowercase();
-            let by_file: Vec<NodeIdx> = narrowed.iter().copied().filter(|n| g.node_path(*n).to_lowercase().ends_with(&f) || g.node_path(*n).to_lowercase().contains(&f)).collect();
+            let by_file: Vec<NodeIdx> =
+                narrowed.iter().copied().filter(|n| g.node_path(*n).to_lowercase().ends_with(&f) || g.node_path(*n).to_lowercase().contains(&f)).collect();
             if !by_file.is_empty() {
                 narrowed = by_file;
             }
@@ -451,7 +456,11 @@ fn node_section(g: &Graph, n: NodeIdx, include_code: bool) -> String {
                     lines.push(format!("- {} ({}):{}{sig}", g.name(*m), g.kind(*m), g.line(*m)));
                 }
                 lines.push(String::new());
-                lines.push(format!("> Structural outline only. Read `{}` or call {} on a specific member for its body.", g.node_path(n), strings::tool("node")));
+                lines.push(format!(
+                    "> Structural outline only. Read `{}` or call {} on a specific member for its body.",
+                    g.node_path(n),
+                    strings::tool("node")
+                ));
             }
         } else if let Ok(src) = g.view.read_source(f) {
             let (s, e) = (g.line(n) as usize, g.end_line(n).max(g.line(n)) as usize);
@@ -480,11 +489,19 @@ fn node_section(g: &Graph, n: NodeIdx, include_code: bool) -> String {
         };
         if !callees.is_empty() {
             let shown: Vec<String> = callees.iter().take(12).map(|r| fmt(r, false)).collect();
-            lines.push(format!("**Calls →** {}{}", shown.join(", "), if callees.len() > 12 { format!(", +{} more", callees.len() - 12) } else { String::new() }));
+            lines.push(format!(
+                "**Calls →** {}{}",
+                shown.join(", "),
+                if callees.len() > 12 { format!(", +{} more", callees.len() - 12) } else { String::new() }
+            ));
         }
         if !callers.is_empty() {
             let shown: Vec<String> = callers.iter().take(12).map(|r| fmt(r, true)).collect();
-            lines.push(format!("**Called by ←** {}{}", shown.join(", "), if callers.len() > 12 { format!(", +{} more", callers.len() - 12) } else { String::new() }));
+            lines.push(format!(
+                "**Called by ←** {}{}",
+                shown.join(", "),
+                if callers.len() > 12 { format!(", +{} more", callers.len() - 12) } else { String::new() }
+            ));
         }
     }
     lines.join("\n")
@@ -531,11 +548,14 @@ fn file_view(g: &Graph, file_arg: &str, mut opts: FileViewOpts) -> ToolOutput {
         return ToolOutput::ok(lines.join("\n"));
     }
     let Some(&f) = matches.first() else {
-        return ToolOutput::ok(format!("No indexed file matches \"{file_arg}\". Codegraph indexes source files; configs/docs it doesn't parse won't appear — Read those directly."));
+        return ToolOutput::ok(format!(
+            "No indexed file matches \"{file_arg}\". Codegraph indexes source files; configs/docs it doesn't parse won't appear — Read those directly."
+        ));
     };
     let path = g.path(f).to_owned();
     let test_label = if g.is_test_file(f) { " · test file" } else { "" };
-    let mut nodes: Vec<NodeIdx> = g.view.nodes_in_file(f).map(NodeIdx).filter(|n| !matches!(g.kind(*n), NodeKind::File | NodeKind::Import | NodeKind::Export)).collect();
+    let mut nodes: Vec<NodeIdx> =
+        g.view.nodes_in_file(f).map(NodeIdx).filter(|n| !matches!(g.kind(*n), NodeKind::File | NodeKind::Import | NodeKind::Export)).collect();
     nodes.sort_by_key(|n| g.line(*n));
     let graph = g.file_graph();
     let dependents: Vec<FileId> = graph.rev.get(f.idx()).map(|v| v.iter().map(|x| FileId(*x)).collect()).unwrap_or_default();
@@ -543,7 +563,13 @@ fn file_view(g: &Graph, file_arg: &str, mut opts: FileViewOpts) -> ToolOutput {
         "no other indexed file depends on it".to_owned()
     } else {
         let names: Vec<&str> = dependents.iter().take(8).map(|d| g.path(*d)).collect();
-        format!("used by {} file{}: {}{}", dependents.len(), if dependents.len() == 1 { "" } else { "s" }, names.join(", "), if dependents.len() > 8 { format!(", +{} more", dependents.len() - 8) } else { String::new() })
+        format!(
+            "used by {} file{}: {}{}",
+            dependents.len(),
+            if dependents.len() == 1 { "" } else { "s" },
+            names.join(", "),
+            if dependents.len() > 8 { format!(", +{} more", dependents.len() - 8) } else { String::new() }
+        )
     };
     let symbol_map = |heading: &str| -> Vec<String> {
         let mut lines = vec![heading.to_owned()];
@@ -583,7 +609,10 @@ fn file_view(g: &Graph, file_arg: &str, mut opts: FileViewOpts) -> ToolOutput {
     let total = if content.ends_with('\n') { file_lines.len() - 1 } else { file_lines.len() };
     let offset = opts.offset.unwrap_or(1).max(1);
     if offset > total {
-        return ToolOutput::ok(format!("**{path}**{test_label} has {total} line{} — offset {offset} is past the end. {dep_summary}", if total == 1 { "" } else { "s" }));
+        return ToolOutput::ok(format!(
+            "**{path}**{test_label} has {total} line{} — offset {offset} is past the end. {dep_summary}",
+            if total == 1 { "" } else { "s" }
+        ));
     }
     let max_lines = opts.limit.unwrap_or(2000).max(1);
     let header = format!("**{path}**{test_label} — {total} lines, {} symbol{} · {dep_summary}", nodes.len(), if nodes.len() == 1 { "" } else { "s" });
@@ -606,7 +635,10 @@ fn file_view(g: &Graph, file_arg: &str, mut opts: FileViewOpts) -> ToolOutput {
     out.extend(numbered);
     if !complete {
         out.push(String::new());
-        out.push(format!("(lines {offset}–{shown_end} of {total} — pass `offset`/`limit` for another range, or `{} <symbol>` for one symbol in full)", strings::tool("node")));
+        out.push(format!(
+            "(lines {offset}–{shown_end} of {total} — pass `offset`/`limit` for another range, or `{} <symbol>` for one symbol in full)",
+            strings::tool("node")
+        ));
     }
     ToolOutput::ok(out.join("\n"))
 }
@@ -622,12 +654,23 @@ fn handle_files(env: &ToolEnv<'_>, args: &Value) -> ToolOutput {
         let p = if p.contains('/') { p.to_owned() } else { format!("**/{p}") };
         globset::Glob::new(&p).ok().map(|g| g.compile_matcher())
     });
-    let mut files: Vec<FileId> = g.view.files().filter(|f| dir.as_ref().map_or(true, |d| g.path(*f) == d || g.path(*f).starts_with(&format!("{d}/")))).filter(|f| glob.as_ref().map_or(true, |m| m.is_match(g.path(*f)))).collect();
+    let mut files: Vec<FileId> = g
+        .view
+        .files()
+        .filter(|f| dir.as_ref().map_or(true, |d| g.path(*f) == d || g.path(*f).starts_with(&format!("{d}/"))))
+        .filter(|f| glob.as_ref().map_or(true, |m| m.is_match(g.path(*f))))
+        .collect();
     files.sort_by(|a, b| g.path(*a).cmp(g.path(*b)));
     if files.is_empty() {
         return ToolOutput::ok("No files found matching the criteria.");
     }
-    let sym_count = |f: FileId| g.view.nodes_in_file(f).map(NodeIdx).filter(|n| !matches!(g.kind(*n), NodeKind::File | NodeKind::Import | NodeKind::Export | NodeKind::Parameter)).count();
+    let sym_count = |f: FileId| {
+        g.view
+            .nodes_in_file(f)
+            .map(NodeIdx)
+            .filter(|n| !matches!(g.kind(*n), NodeKind::File | NodeKind::Import | NodeKind::Export | NodeKind::Parameter))
+            .count()
+    };
     let describe = |f: FileId| -> String {
         if meta {
             format!("{} symbols", sym_count(f))

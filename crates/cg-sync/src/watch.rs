@@ -5,8 +5,8 @@
 //! a sync as well: sync always compares the whole tree against the index.
 
 use crate::sync::{sync, SyncOptions};
-use cg_core::config::ProjectConfig;
 use cg_core::brand;
+use cg_core::config::ProjectConfig;
 use cg_scan::IgnoreRules;
 use cg_store::Store;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
@@ -51,7 +51,19 @@ impl Drop for WatchHandle {
 fn is_config_name(name: &str) -> bool {
     matches!(
         name,
-        ".gitignore" | "cgr.json" | "codegraph.json" | "package.json" | "go.mod" | "Cargo.toml" | "pyproject.toml" | "setup.py" | "setup.cfg" | "pom.xml" | "build.gradle" | "build.gradle.kts" | "jsconfig.json"
+        ".gitignore"
+            | "cgr.json"
+            | "codegraph.json"
+            | "package.json"
+            | "go.mod"
+            | "Cargo.toml"
+            | "pyproject.toml"
+            | "setup.py"
+            | "setup.cfg"
+            | "pom.xml"
+            | "build.gradle"
+            | "build.gradle.kts"
+            | "jsconfig.json"
     ) || name.starts_with("tsconfig")
         || (name.starts_with("requirements") && name.ends_with(".txt"))
 }
@@ -87,10 +99,7 @@ impl Filter {
 pub fn spawn_watcher(root: PathBuf, opts: SyncOptions) -> WatchHandle {
     let stop = Arc::new(AtomicBool::new(false));
     let s2 = stop.clone();
-    let thread = std::thread::Builder::new()
-        .name("cgr-watch".into())
-        .spawn(move || watch_loop(root, opts, s2))
-        .ok();
+    let thread = std::thread::Builder::new().name("cgr-watch".into()).spawn(move || watch_loop(root, opts, s2)).ok();
     WatchHandle { stop, thread }
 }
 

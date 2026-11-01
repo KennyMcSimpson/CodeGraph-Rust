@@ -69,7 +69,10 @@ macro_rules! re {
 }
 
 re!(express_re, r#"(?m)\b([A-Za-z_$][\w$]*)\s*\.\s*(get|post|put|delete|patch|options|head|all|use)\s*\(\s*(['"`])(/[^'"`\n]*)['"`]\s*,"#);
-re!(py_decorator_re, r#"(?m)^[ \t]*@[ \t]*([A-Za-z_]\w*)[ \t]*\.[ \t]*(route|get|post|put|delete|patch|head|options|websocket)[ \t]*\(\s*(?:[rbuf]*)(['"])([^'"\n]*)['"]"#);
+re!(
+    py_decorator_re,
+    r#"(?m)^[ \t]*@[ \t]*([A-Za-z_]\w*)[ \t]*\.[ \t]*(route|get|post|put|delete|patch|head|options|websocket)[ \t]*\(\s*(?:[rbuf]*)(['"])([^'"\n]*)['"]"#
+);
 re!(py_methods_re, r#"methods\s*=\s*[\[\(]([^\]\)]*)[\]\)]"#);
 re!(py_def_re, r"(?m)^[ \t]*(?:async[ \t]+)?def[ \t]+(\w+)");
 re!(django_re, r#"(?m)\b(?:path|re_path|url)\s*\(\s*[rbuf]*(['"])([^'"\n]*)['"]\s*,\s*([A-Za-z_][\w.]*)"#);
@@ -77,7 +80,10 @@ re!(gin_re, r#"(?m)\b([A-Za-z_]\w*)\s*\.\s*(GET|POST|PUT|DELETE|PATCH|OPTIONS|HE
 re!(spring_re, r#"(?m)^[ \t]*@(Get|Post|Put|Delete|Patch|Request)Mapping\b(?:\s*\(([^)]*)\))?"#);
 re!(spring_path_re, r#"(?:(?:value|path)\s*=\s*)?\{?\s*"([^"]*)""#);
 re!(spring_http_re, r"RequestMethod\.(\w+)");
-re!(java_method_re, r"(?m)^[ \t]*(?:@\w+(?:\([^)]*\))?\s*)*(?:public|private|protected)?[ \t]*(?:static[ \t]+)?(?:final[ \t]+)?[\w<>\[\],.? ]+?[ \t]+(\w+)[ \t]*\(");
+re!(
+    java_method_re,
+    r"(?m)^[ \t]*(?:@\w+(?:\([^)]*\))?\s*)*(?:public|private|protected)?[ \t]*(?:static[ \t]+)?(?:final[ \t]+)?[\w<>\[\],.? ]+?[ \t]+(\w+)[ \t]*\("
+);
 re!(kotlin_fun_re, r"(?m)^[ \t]*(?:(?:public|private|protected|internal|override|suspend)[ \t]+)*fun[ \t]+(?:<[^>]*>[ \t]*)?(\w+)[ \t]*\(");
 re!(spring_class_re, r"(?m)^[ \t]*(?:public[ \t]+|open[ \t]+|abstract[ \t]+)*(?:class|interface)[ \t]+\w+");
 re!(axum_route_re, r#"\.route\(\s*"([^"\n]*)"\s*,\s*"#);
@@ -139,11 +145,14 @@ fn handlers_in(src: &str, lines: &Lines, args: &[(usize, &str)]) -> Vec<Handler>
         let t = text.trim();
         let inner: Vec<(usize, &str)> = if t.starts_with('[') && t.ends_with(']') {
             let base = off + text.find('[').unwrap_or(0) + 1;
-            t[1..t.len() - 1].split(',').scan(base, |pos, s| {
-                let o = *pos;
-                *pos += s.len() + 1;
-                Some((o, s))
-            }).collect()
+            t[1..t.len() - 1]
+                .split(',')
+                .scan(base, |pos, s| {
+                    let o = *pos;
+                    *pos += s.len() + 1;
+                    Some((o, s))
+                })
+                .collect()
         } else {
             vec![(*off, *text)]
         };
@@ -164,7 +173,11 @@ pub fn scan_express(src: &str) -> Vec<Route> {
     let mut out = Vec::new();
     for m in express_re().captures_iter(src) {
         let recv = &m[1];
-        let looks_like_router = matches!(recv, "app" | "router" | "server" | "api" | "route" | "routes" | "r") || recv.ends_with("Router") || recv.ends_with("App") || recv.ends_with("Api") || recv.ends_with("Routes");
+        let looks_like_router = matches!(recv, "app" | "router" | "server" | "api" | "route" | "routes" | "r")
+            || recv.ends_with("Router")
+            || recv.ends_with("App")
+            || recv.ends_with("Api")
+            || recv.ends_with("Routes");
         if !looks_like_router {
             continue;
         }
@@ -320,7 +333,12 @@ pub fn scan_spring(src: &str, kotlin: bool) -> Vec<Route> {
         let (hl, hc) = lines.at(src, after + hm.start());
         let (line, _) = lines.at(src, whole.start());
         let full = format!("{}{}{}", prefix, if path.starts_with('/') || path.is_empty() || prefix.ends_with('/') { "" } else { "/" }, path);
-        out.push(Route { method, path: if full.is_empty() { "/".into() } else { full }, line, handlers: vec![Handler { name: hm.as_str().to_owned(), line: hl, col: hc }] });
+        out.push(Route {
+            method,
+            path: if full.is_empty() { "/".into() } else { full },
+            line,
+            handlers: vec![Handler { name: hm.as_str().to_owned(), line: hl, col: hc }],
+        });
     }
     out
 }
@@ -337,7 +355,12 @@ pub fn scan_axum(src: &str) -> Vec<Route> {
         for mm in axum_method_re().captures_iter(body) {
             let h = mm.get(2).unwrap();
             let (hl, hc) = lines.at(src, whole.end() + h.start());
-            out.push(Route { method: mm[1].to_ascii_uppercase(), path: m[1].to_owned(), line, handlers: vec![Handler { name: h.as_str().to_owned(), line: hl, col: hc }] });
+            out.push(Route {
+                method: mm[1].to_ascii_uppercase(),
+                path: m[1].to_owned(),
+                line,
+                handlers: vec![Handler { name: h.as_str().to_owned(), line: hl, col: hc }],
+            });
         }
     }
     out
@@ -383,7 +406,12 @@ pub fn scan_next(rel: &str, src: &str) -> Vec<Route> {
         for m in next_method_re().captures_iter(src) {
             let g = m.get(1).unwrap();
             let (l, c) = lines.at(src, g.start());
-            out.push(Route { method: g.as_str().to_owned(), path: path.clone(), line: l, handlers: vec![Handler { name: g.as_str().to_owned(), line: l, col: c }] });
+            out.push(Route {
+                method: g.as_str().to_owned(),
+                path: path.clone(),
+                line: l,
+                handlers: vec![Handler { name: g.as_str().to_owned(), line: l, col: c }],
+            });
         }
         return out;
     }
@@ -391,7 +419,12 @@ pub fn scan_next(rel: &str, src: &str) -> Vec<Route> {
         let g = m.get(1).unwrap();
         if !matches!(g.as_str(), "function" | "async" | "class") {
             let (l, c) = lines.at(src, g.start());
-            out.push(Route { method: if is_pages_api { "ANY".into() } else { "GET".into() }, path, line: l, handlers: vec![Handler { name: g.as_str().to_owned(), line: l, col: c }] });
+            out.push(Route {
+                method: if is_pages_api { "ANY".into() } else { "GET".into() },
+                path,
+                line: l,
+                handlers: vec![Handler { name: g.as_str().to_owned(), line: l, col: c }],
+            });
         }
     }
     out
@@ -491,7 +524,13 @@ mod tests {
         let src = "const app = express();\napp.get('/users/:id', auth, ctrl.show);\nrouter.post(\"/users\", [validate, rate], create);\napp.use('/api', apiRouter);\napp.get('/inline', (req, res) => res.send('x'));\nfoo.get('/nope', h);\napp.get(`/tpl`, tplHandler)";
         assert_eq!(
             names(&scan_express(src)),
-            vec!["GET /users/:id -> auth|ctrl.show", "POST /users -> validate|rate|create", "USE /api -> apiRouter", "GET /inline -> ", "GET /tpl -> tplHandler"]
+            vec![
+                "GET /users/:id -> auth|ctrl.show",
+                "POST /users -> validate|rate|create",
+                "USE /api -> apiRouter",
+                "GET /inline -> ",
+                "GET /tpl -> tplHandler"
+            ]
         );
     }
 

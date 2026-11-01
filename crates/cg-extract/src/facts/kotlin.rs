@@ -57,13 +57,10 @@ fn type_name(cx: &Cx, n: Node) -> String {
     match n.kind() {
         "user_type" => {
             // Foo.Bar<T> -> "Foo.Bar"
-            let parts: Vec<&str> = kids(n).filter(|c| c.kind() == "type_identifier" || c.kind() == "simple_user_type").map(|c| {
-                if c.kind() == "simple_user_type" {
-                    first(c, "type_identifier").map(|t| cx.text(t)).unwrap_or("")
-                } else {
-                    cx.text(c)
-                }
-            }).collect();
+            let parts: Vec<&str> = kids(n)
+                .filter(|c| c.kind() == "type_identifier" || c.kind() == "simple_user_type")
+                .map(|c| if c.kind() == "simple_user_type" { first(c, "type_identifier").map(|t| cx.text(t)).unwrap_or("") } else { cx.text(c) })
+                .collect();
             parts.join(".")
         }
         "nullable_type" | "parenthesized_type" => kids(n).find(|c| c.is_named()).map(|c| type_name(cx, c)).unwrap_or_default(),
@@ -73,10 +70,7 @@ fn type_name(cx: &Cx, n: Node) -> String {
 }
 
 fn find_type(cx: &Cx, n: Node) -> String {
-    kids(n)
-        .find(|c| matches!(c.kind(), "user_type" | "nullable_type" | "parenthesized_type"))
-        .map(|t| type_name(cx, t))
-        .unwrap_or_default()
+    kids(n).find(|c| matches!(c.kind(), "user_type" | "nullable_type" | "parenthesized_type")).map(|t| type_name(cx, t)).unwrap_or_default()
 }
 
 fn init_of(cx: &Cx, n: Node) -> String {
@@ -124,7 +118,15 @@ fn import(cx: &mut Cx, n: Node, scope: u32) {
     }
     let last = path.rsplit('.').next().unwrap_or("").to_owned();
     let alias = first(n, "import_alias").and_then(|a| first(a, "type_identifier")).map(|t| cx.text(t).to_owned());
-    cx.add_import(ImportFact { local: alias.unwrap_or_else(|| last.clone()), imported: last, spec: path, kind: ImportKind::Named, type_only: false, scope, line });
+    cx.add_import(ImportFact {
+        local: alias.unwrap_or_else(|| last.clone()),
+        imported: last,
+        spec: path,
+        kind: ImportKind::Named,
+        type_only: false,
+        scope,
+        line,
+    });
 }
 
 fn class(cx: &mut Cx, n: Node, scope: u32) {

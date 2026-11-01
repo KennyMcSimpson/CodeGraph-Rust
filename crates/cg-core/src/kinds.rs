@@ -190,9 +190,26 @@ pub enum LangFamily {
 
 impl Lang {
     pub const ALL: &'static [Lang] = &[
-        Lang::TypeScript, Lang::Tsx, Lang::JavaScript, Lang::Jsx, Lang::Python, Lang::Go,
-        Lang::Java, Lang::Rust, Lang::Kotlin, Lang::C, Lang::Cpp, Lang::CSharp, Lang::Php,
-        Lang::Ruby, Lang::Swift, Lang::Dart, Lang::Scala, Lang::Lua, Lang::Luau, Lang::R,
+        Lang::TypeScript,
+        Lang::Tsx,
+        Lang::JavaScript,
+        Lang::Jsx,
+        Lang::Python,
+        Lang::Go,
+        Lang::Java,
+        Lang::Rust,
+        Lang::Kotlin,
+        Lang::C,
+        Lang::Cpp,
+        Lang::CSharp,
+        Lang::Php,
+        Lang::Ruby,
+        Lang::Swift,
+        Lang::Dart,
+        Lang::Scala,
+        Lang::Lua,
+        Lang::Luau,
+        Lang::R,
     ];
 
     /// Upstream `Language` string; also the kernel's language argument.
@@ -236,18 +253,7 @@ impl Lang {
 
     /// Whether this build has a walker for the language (MVP set, design doc 1.3 + D2).
     pub fn is_supported(self) -> bool {
-        matches!(
-            self,
-            Lang::TypeScript
-                | Lang::Tsx
-                | Lang::JavaScript
-                | Lang::Jsx
-                | Lang::Python
-                | Lang::Go
-                | Lang::Java
-                | Lang::Rust
-                | Lang::Kotlin
-        )
+        matches!(self, Lang::TypeScript | Lang::Tsx | Lang::JavaScript | Lang::Jsx | Lang::Python | Lang::Go | Lang::Java | Lang::Rust | Lang::Kotlin)
     }
 
     pub fn family(self) -> LangFamily {

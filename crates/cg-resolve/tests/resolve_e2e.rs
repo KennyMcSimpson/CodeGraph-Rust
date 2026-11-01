@@ -242,11 +242,19 @@ fn debug_python_typing_and_package() {
     }
     for f in view.files() {
         for i in view.imports_of(f) {
-            eprintln!("IMPORT {} local={} imported={} spec={} kind={} scope={} line={}", view.file(f).path(), view.text_str(i.local), view.text_str(i.imported), view.text_str(i.spec), i.kind, i.scope.0, i.line);
+            eprintln!(
+                "IMPORT {} local={} imported={} spec={} kind={} scope={} line={}",
+                view.file(f).path(),
+                view.text_str(i.local),
+                view.text_str(i.imported),
+                view.text_str(i.spec),
+                i.kind,
+                i.scope.0,
+                i.line
+            );
         }
     }
 }
-
 
 #[test]
 fn express_flask_and_gin_routes_link_to_their_handlers() {

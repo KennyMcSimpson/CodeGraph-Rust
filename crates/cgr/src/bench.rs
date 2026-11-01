@@ -40,7 +40,15 @@ fn dist(mut v: Vec<f64>) -> Dist {
     if v.is_empty() {
         return Dist::default();
     }
-    Dist { n: v.len(), min: v[0], p50: percentile(&v, 50.0), p95: percentile(&v, 95.0), p99: percentile(&v, 99.0), max: v[v.len() - 1], mean: v.iter().sum::<f64>() / v.len() as f64 }
+    Dist {
+        n: v.len(),
+        min: v[0],
+        p50: percentile(&v, 50.0),
+        p95: percentile(&v, 95.0),
+        p99: percentile(&v, 99.0),
+        max: v[v.len() - 1],
+        mean: v.iter().sum::<f64>() / v.len() as f64,
+    }
 }
 
 impl Dist {
@@ -48,7 +56,17 @@ impl Dist {
         json!({"n": self.n, "min": self.min, "p50": self.p50, "p95": self.p95, "p99": self.p99, "max": self.max, "mean": self.mean})
     }
     fn line(&self, unit: &str) -> String {
-        format!("n={} min {:.1}{u} p50 {:.1}{u} p95 {:.1}{u} p99 {:.1}{u} max {:.1}{u} mean {:.1}{u}", self.n, self.min, self.p50, self.p95, self.p99, self.max, self.mean, u = unit)
+        format!(
+            "n={} min {:.1}{u} p50 {:.1}{u} p95 {:.1}{u} p99 {:.1}{u} max {:.1}{u} mean {:.1}{u}",
+            self.n,
+            self.min,
+            self.p50,
+            self.p95,
+            self.p99,
+            self.max,
+            self.mean,
+            u = unit
+        )
     }
 }
 
@@ -94,7 +112,9 @@ fn sample_names(proj: &Project, rng: &mut Rng, want: usize) -> Vec<String> {
     for f in view.files() {
         for n in view.nodes_in_file(f) {
             let node = view.node(cg_core::NodeIdx(n));
-            if matches!(node.kind(), NodeKind::Function | NodeKind::Method | NodeKind::Class | NodeKind::Struct | NodeKind::Interface | NodeKind::Trait) && node.name().len() >= 4 {
+            if matches!(node.kind(), NodeKind::Function | NodeKind::Method | NodeKind::Class | NodeKind::Struct | NodeKind::Interface | NodeKind::Trait)
+                && node.name().len() >= 4
+            {
                 all.push(node.name().to_owned());
             }
         }
@@ -276,7 +296,15 @@ pub fn index(path: Option<PathBuf>, runs: usize, threads: Option<usize>, with_re
     } else {
         println!(
             "index {}: {} files, {} nodes, {} edges, {}/{} references resolved, source {} MB -> segment {} MB, {} threads",
-            root.display(), r0["files"], r0["nodes"], r0["edges"], r0["resolved"], r0["refs"], r0["sourceMb"], r0["segmentMb"], r0["threads"]
+            root.display(),
+            r0["files"],
+            r0["nodes"],
+            r0["edges"],
+            r0["resolved"],
+            r0["refs"],
+            r0["sourceMb"],
+            r0["segmentMb"],
+            r0["threads"]
         );
         println!("  total     {}", total.line(" ms"));
         println!("  peak RSS  {}", rss.line(" MB"));

@@ -133,7 +133,9 @@ fn new_file(lang: &str, n: usize, callee: &str) -> (String, String) {
         "ts" => (format!("ts/gen{n}.ts"), format!("import {{ helper }} from './service';\nexport function gen{n}() {{ return helper() + {callee}(); }}\n")),
         "py" => (format!("py/pkg/gen{n}.py"), format!("from .util import util\n\n\ndef gen{n}():\n    return util()\n")),
         "go" => (format!("go/a/gen{n}.go"), format!("package a\n\nfunc Gen{n}() int {{ return Do() }}\n")),
-        "java" => (format!("java/com/ex/Gen{n}.java"), format!("package com.ex;\n\npublic class Gen{n} {{\n    public void run() {{ new Circle().area(); }}\n}}\n")),
+        "java" => {
+            (format!("java/com/ex/Gen{n}.java"), format!("package com.ex;\n\npublic class Gen{n} {{\n    public void run() {{ new Circle().area(); }}\n}}\n"))
+        }
         "rs" => (format!("rs/src/gen{n}.rs"), "pub fn extra() { crate::run(); }\n".to_string()),
         _ => (format!("kt/G{n}.kt"), format!("package demo\n\nclass G{n} {{\n    fun go() {{ A().hello() }}\n}}\n")),
     }
@@ -188,7 +190,15 @@ fn mutate(root: &Path, rng: &mut Rng, step: u64, log: &mut Vec<String>) {
         }
         3 => {
             // rename a known definition in its own file only (callers dangle)
-            let table: &[(&str, &str)] = &[("ts/service.ts", "helper"), ("ts/util.ts", "util"), ("py/pkg/util.py", "util"), ("go/a/a.go", "Do"), ("rs/src/util.rs", "go"), ("ts/base.ts", "base"), ("kt/A.kt", "hello")];
+            let table: &[(&str, &str)] = &[
+                ("ts/service.ts", "helper"),
+                ("ts/util.ts", "util"),
+                ("py/pkg/util.py", "util"),
+                ("go/a/a.go", "Do"),
+                ("rs/src/util.rs", "go"),
+                ("ts/base.ts", "base"),
+                ("kt/A.kt", "hello"),
+            ];
             let (f, name) = table[rng.below(table.len())];
             if let Ok(cur) = fs::read_to_string(root.join(f)) {
                 if cur.contains(name) {
@@ -334,7 +344,10 @@ fn targeted_edits_match_full_rebuild() {
         ("kt restore", original("kt/A.kt")),
         ("ts widget calls missing", replace_in("ts/widget.ts", "util();", "util(); later();")),
         ("ts define later", put("ts/later.ts", "export function later() {}\n")),
-        ("ts widget imports later", replace_in("ts/widget.ts", "import { Base } from './base';", "import { Base } from './base';\nimport { later } from './later';")),
+        (
+            "ts widget imports later",
+            replace_in("ts/widget.ts", "import { Base } from './base';", "import { Base } from './base';\nimport { later } from './later';"),
+        ),
         ("ts remove later", delete("ts/later.ts")),
         ("ts add missing module", put("ts/missing.ts", "export class Missing {}\n")),
         ("ts remove missing module", delete("ts/missing.ts")),
@@ -408,7 +421,13 @@ fn targeted_edits_match_full_rebuild() {
         ("java: Shape restored", original("java/com/ex/Shape.java")),
         ("go: En loses Name", replace_in("go/a/greeter.go", "func (e *En) Name() string { return \"en\" }\n", "")),
         ("go: En regains Name", original("go/a/greeter.go")),
-        ("go: second implementer", put("go/a/fr.go", "package a\n\ntype Fr struct{}\n\nfunc (f *Fr) Greet() string { return \"salut\" }\nfunc (f *Fr) Name() string { return \"fr\" }\n")),
+        (
+            "go: second implementer",
+            put(
+                "go/a/fr.go",
+                "package a\n\ntype Fr struct{}\n\nfunc (f *Fr) Greet() string { return \"salut\" }\nfunc (f *Fr) Name() string { return \"fr\" }\n",
+            ),
+        ),
         ("go: second implementer removed", delete("go/a/fr.go")),
         ("go: interface gains a method", replace_in("go/a/greeter.go", "Name() string\n}", "Name() string\n\tBye() string\n}")),
         ("go: interface restored", original("go/a/greeter.go")),
@@ -474,7 +493,9 @@ fn print_fixture_refs() {
     }
     index_project(root, &opts()).unwrap();
     for l in canonical_of(root) {
-        if (l.starts_with("R ") && (l.contains("ts/m2.ts") || l.contains("ts/usesvc.ts") || l.contains("ts/viab2.ts") || l.contains("ts/use.ts"))) || l.starts_with("F ") && l.contains("m2") {
+        if (l.starts_with("R ") && (l.contains("ts/m2.ts") || l.contains("ts/usesvc.ts") || l.contains("ts/viab2.ts") || l.contains("ts/use.ts")))
+            || l.starts_with("F ") && l.contains("m2")
+        {
             println!("{l}");
         }
     }

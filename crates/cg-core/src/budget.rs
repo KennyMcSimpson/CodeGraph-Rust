@@ -25,22 +25,13 @@ impl MemBudget {
     pub fn from_total(total: u64, threads: usize) -> MemBudget {
         let total = total.max(256 * MB);
         let by_mem = (total / 4 / PER_THREAD_BYTES).max(1) as usize;
-        MemBudget {
-            total,
-            extract: total / 4,
-            resolve: total * 35 / 100,
-            synth: total * 15 / 100,
-            threads: threads.min(by_mem).max(1),
-        }
+        MemBudget { total, extract: total / 4, resolve: total * 35 / 100, synth: total * 15 / 100, threads: threads.min(by_mem).max(1) }
     }
 
     /// Detect from the environment, honouring `CGR_MEMORY_MB` / `CGR_THREADS`.
     pub fn detect() -> MemBudget {
         let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2);
-        let threads = env::get(env::THREADS, None)
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|n| *n > 0)
-            .unwrap_or(cores);
+        let threads = env::get(env::THREADS, None).and_then(|v| v.parse::<usize>().ok()).filter(|n| *n > 0).unwrap_or(cores);
         let total = env::get(env::MEMORY_MB, None)
             .and_then(|v| v.parse::<u64>().ok())
             .map(|mb| mb * MB)
@@ -80,9 +71,7 @@ fn read_u64(path: &str) -> Option<u64> {
 #[cfg(target_os = "linux")]
 fn linux_available() -> Option<u64> {
     let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
-    let kb = |key: &str| -> Option<u64> {
-        meminfo.lines().find(|l| l.starts_with(key))?.split_whitespace().nth(1)?.parse::<u64>().ok()
-    };
+    let kb = |key: &str| -> Option<u64> { meminfo.lines().find(|l| l.starts_with(key))?.split_whitespace().nth(1)?.parse::<u64>().ok() };
     let mut avail = kb("MemAvailable:")? * 1024;
     // cgroup v2: memory.max - memory.current, plus inactive_file (page cache counts as used).
     if let Ok(max) = std::fs::read_to_string("/sys/fs/cgroup/memory.max") {
@@ -90,11 +79,7 @@ fn linux_available() -> Option<u64> {
             let cur = read_u64("/sys/fs/cgroup/memory.current").unwrap_or(0);
             let inactive = std::fs::read_to_string("/sys/fs/cgroup/memory.stat")
                 .ok()
-                .and_then(|s| {
-                    s.lines()
-                        .find(|l| l.starts_with("inactive_file "))
-                        .and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
-                })
+                .and_then(|s| s.lines().find(|l| l.starts_with("inactive_file ")).and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok()))
                 .unwrap_or(0);
             avail = avail.min(max.saturating_sub(cur.saturating_sub(inactive)));
         }
@@ -121,11 +106,7 @@ fn macos_available() -> Option<u64> {
         .and_then(|n| n.parse().ok())
         .unwrap_or(16384);
     let pages = |key: &str| -> u64 {
-        text.lines()
-            .find(|l| l.starts_with(key))
-            .and_then(|l| l.split(':').nth(1))
-            .and_then(|v| v.trim().trim_end_matches('.').parse().ok())
-            .unwrap_or(0)
+        text.lines().find(|l| l.starts_with(key)).and_then(|l| l.split(':').nth(1)).and_then(|v| v.trim().trim_end_matches('.').parse().ok()).unwrap_or(0)
     };
     let free = pages("Pages free") + pages("Pages inactive") + pages("Pages speculative");
     Some(free * page)

@@ -99,18 +99,7 @@ pub fn build_name_indexes(names: &StrPool, has_post: impl Fn(usize) -> bool + Sy
     tris.par_sort_unstable();
     let (tri_keys, tri_off, tri_post) = group_pairs(&tris);
 
-    NameIndexes {
-        names_fst,
-        lower_fst,
-        lower_post_off,
-        lower_post,
-        segs_fst,
-        seg_post_off,
-        seg_post,
-        tri_keys,
-        tri_off,
-        tri_post,
-    }
+    NameIndexes { names_fst, lower_fst, lower_post_off, lower_post, segs_fst, seg_post_off, seg_post, tri_keys, tri_off, tri_post }
 }
 
 pub struct TokenIndex {

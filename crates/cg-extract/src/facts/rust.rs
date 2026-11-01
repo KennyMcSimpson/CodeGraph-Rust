@@ -49,7 +49,9 @@ fn rust_type_name(cx: &Cx, n: Node) -> String {
         "type_identifier" | "scoped_type_identifier" => cx.text(n).to_owned(),
         "generic_type" => n.child_by_field_name("type").map(|c| rust_type_name(cx, c)).unwrap_or_default(),
         "reference_type" | "pointer_type" => n.child_by_field_name("type").map(|c| rust_type_name(cx, c)).unwrap_or_default(),
-        "abstract_type" | "dynamic_type" | "bounded_type" => n.child_by_field_name("trait").or_else(|| n.named_child(0)).map(|c| rust_type_name(cx, c)).unwrap_or_default(),
+        "abstract_type" | "dynamic_type" | "bounded_type" => {
+            n.child_by_field_name("trait").or_else(|| n.named_child(0)).map(|c| rust_type_name(cx, c)).unwrap_or_default()
+        }
         _ => String::new(),
     }
 }
@@ -186,7 +188,15 @@ fn use_decl(cx: &mut Cx, n: Node, scope: u32) {
         // path = full item path segments; the item is the last one
         if wildcard {
             let spec = path.join("::");
-            cx.add_import(ImportFact { local: "*".into(), imported: "*".into(), spec: spec.clone(), kind: ImportKind::Namespace, type_only: false, scope, line });
+            cx.add_import(ImportFact {
+                local: "*".into(),
+                imported: "*".into(),
+                spec: spec.clone(),
+                kind: ImportKind::Namespace,
+                type_only: false,
+                scope,
+                line,
+            });
             if public {
                 cx.facts.exports.push(ExportFact { name: "*".into(), node_row: NONE, from_spec: spec, from_name: "*".into(), star: true });
             }
@@ -195,15 +205,7 @@ fn use_decl(cx: &mut Cx, n: Node, scope: u32) {
         let Some((item, module)) = path.split_last() else { continue };
         let spec = module.join("::");
         let local = local.unwrap_or_else(|| item.clone());
-        cx.add_import(ImportFact {
-            local: local.clone(),
-            imported: item.clone(),
-            spec: spec.clone(),
-            kind: ImportKind::Named,
-            type_only: false,
-            scope,
-            line,
-        });
+        cx.add_import(ImportFact { local: local.clone(), imported: item.clone(), spec: spec.clone(), kind: ImportKind::Named, type_only: false, scope, line });
         if public {
             cx.facts.exports.push(ExportFact { name: local, node_row: NONE, from_spec: spec, from_name: item.clone(), star: false });
         }

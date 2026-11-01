@@ -68,9 +68,7 @@ impl ProjectConfig {
                     for (ext, lang) in m {
                         let l = lang.as_str().map(Lang::parse).unwrap_or(Lang::Unknown);
                         if l == Lang::Unknown {
-                            self.warnings.push(format!(
-                                "{file}: extension `{ext}` maps to unknown language {lang}; ignored"
-                            ));
+                            self.warnings.push(format!("{file}: extension `{ext}` maps to unknown language {lang}; ignored"));
                         } else {
                             let ext = if ext.starts_with('.') { ext.clone() } else { format!(".{ext}") };
                             self.extensions.insert(ext.to_ascii_lowercase(), l);
@@ -106,11 +104,7 @@ mod tests {
     fn cgr_json_wins_and_bad_fields_only_warn() {
         let dir = std::env::temp_dir().join(format!("cg-core-cfg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("codegraph.json"),
-            r#"{"exclude":["a/"],"extensions":{".tpl":"php","bad":"klingon"},"deprioritize":"oops"}"#,
-        )
-        .unwrap();
+        std::fs::write(dir.join("codegraph.json"), r#"{"exclude":["a/"],"extensions":{".tpl":"php","bad":"klingon"},"deprioritize":"oops"}"#).unwrap();
         std::fs::write(dir.join("cgr.json"), r#"{"exclude":["b/"]}"#).unwrap();
         let cfg = ProjectConfig::load(&dir);
         assert_eq!(cfg.exclude, vec!["b/".to_string()]);

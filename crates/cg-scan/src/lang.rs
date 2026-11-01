@@ -98,11 +98,7 @@ pub fn has_flow_pragma(source: &str) -> bool {
         }
     }
     let lead = &head[..lead_end.min(head.len())];
-    let has = |word: &str| {
-        lead.match_indices(word).any(|(i, _)| {
-            lead[i + word.len()..].chars().next().map_or(true, |c| !(c.is_alphanumeric() || c == '_'))
-        })
-    };
+    let has = |word: &str| lead.match_indices(word).any(|(i, _)| lead[i + word.len()..].chars().next().map_or(true, |c| !(c.is_alphanumeric() || c == '_')));
     has("@flow") && !has("@noflow")
 }
 

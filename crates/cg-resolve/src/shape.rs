@@ -7,12 +7,28 @@ use smallvec::SmallVec;
 pub enum Shape<'a> {
     Bare(&'a str),
     /// `root.path.method` / `root::path::method` with `root` an ordinary identifier.
-    Member { root: &'a str, path: SmallVec<[&'a str; 3]>, method: &'a str },
+    Member {
+        root: &'a str,
+        path: SmallVec<[&'a str; 3]>,
+        method: &'a str,
+    },
     /// `this|self|cls|Self` followed by fields and a final method.
-    This { kw: &'a str, fields: SmallVec<[&'a str; 3]>, method: &'a str },
-    Super { method: &'a str },
-    New { class: &'a str, method: &'a str },
-    CallResult { inner: &'a str, method: &'a str },
+    This {
+        kw: &'a str,
+        fields: SmallVec<[&'a str; 3]>,
+        method: &'a str,
+    },
+    Super {
+        method: &'a str,
+    },
+    New {
+        class: &'a str,
+        method: &'a str,
+    },
+    CallResult {
+        inner: &'a str,
+        method: &'a str,
+    },
 }
 
 fn split_segments(name: &str) -> SmallVec<[&str; 6]> {
@@ -87,14 +103,8 @@ mod tests {
     fn shapes() {
         assert_eq!(parse_shape("foo"), Shape::Bare("foo"));
         assert_eq!(parse_shape("helper.go"), Shape::Member { root: "helper", path: SmallVec::new(), method: "go" });
-        assert_eq!(
-            parse_shape("s.repo.Find"),
-            Shape::Member { root: "s", path: SmallVec::from_slice(&["repo"]), method: "Find" }
-        );
-        assert_eq!(
-            parse_shape("this.svc.run"),
-            Shape::This { kw: "this", fields: SmallVec::from_slice(&["svc"]), method: "run" }
-        );
+        assert_eq!(parse_shape("s.repo.Find"), Shape::Member { root: "s", path: SmallVec::from_slice(&["repo"]), method: "Find" });
+        assert_eq!(parse_shape("this.svc.run"), Shape::This { kw: "this", fields: SmallVec::from_slice(&["svc"]), method: "run" });
         assert_eq!(parse_shape("self.repo[].find"), Shape::This { kw: "self", fields: SmallVec::from_slice(&["repo"]), method: "find" });
         assert_eq!(parse_shape("new Widget().render"), Shape::New { class: "Widget", method: "render" });
         assert_eq!(parse_shape("super().run"), Shape::Super { method: "run" });

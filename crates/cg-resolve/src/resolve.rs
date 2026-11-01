@@ -74,9 +74,7 @@ impl Accept {
     fn ok(self, k: NodeKind) -> bool {
         match self {
             Accept::Type => k.is_type() || matches!(k, NodeKind::Namespace | NodeKind::Module),
-            Accept::Callable => {
-                k.is_callable() || k.is_type() || matches!(k, NodeKind::Variable | NodeKind::Constant | NodeKind::Property | NodeKind::Field)
-            }
+            Accept::Callable => k.is_callable() || k.is_type() || matches!(k, NodeKind::Variable | NodeKind::Constant | NodeKind::Property | NodeKind::Field),
             Accept::Any => k.is_definition(),
         }
     }
@@ -348,9 +346,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
 
     /// Binding of a file-level variable called `name` (module singletons such as `app = Flask()`).
     pub fn file_binding(&self, name: &str) -> Option<&'v BindingRec> {
-        self.bindings
-            .get(&(0, name))
-            .and_then(|l| l.iter().copied().find(|b| b.kind == BindKind::Local as u8 || b.kind == BindKind::Field as u8))
+        self.bindings.get(&(0, name)).and_then(|l| l.iter().copied().find(|b| b.kind == BindKind::Local as u8 || b.kind == BindKind::Field as u8))
     }
 
     /// Follow `segs` from a module / type: exports, top-level definitions, submodules, members.
@@ -605,7 +601,17 @@ impl<'e, 'v> FileCx<'e, 'v> {
         match best.len() {
             0 => NameRes::NotFound,
             1 => {
-                let (by_, conf) = if best_score >= 180 { (by::LEXICAL, 98) } else if best_score >= 80 { (by::PACKAGE, 85) } else if best_score >= 60 { (by::GLOBAL, 70) } else if best_score >= 40 { (by::GLOBAL, 55) } else { (by::GLOBAL, 40) };
+                let (by_, conf) = if best_score >= 180 {
+                    (by::LEXICAL, 98)
+                } else if best_score >= 80 {
+                    (by::PACKAGE, 85)
+                } else if best_score >= 60 {
+                    (by::GLOBAL, 70)
+                } else if best_score >= 40 {
+                    (by::GLOBAL, 55)
+                } else {
+                    (by::GLOBAL, 40)
+                };
                 NameRes::Found(best[0], by_, conf)
             }
             k => {
@@ -1156,9 +1162,7 @@ impl<'e, 'v> FileCx<'e, 'v> {
         let Some(kind) = RefKind::from_wire(r.kind) else { return Outcome::st(status::NO_CANDIDATE) };
         match kind {
             RefKind::Edge(EdgeKind::Imports) => self.resolve_import_ref(name, r),
-            RefKind::Edge(EdgeKind::Extends | EdgeKind::Implements | EdgeKind::TypeOf | EdgeKind::Returns) => {
-                self.resolve_type_ref(wcx, r, name, Accept::Type)
-            }
+            RefKind::Edge(EdgeKind::Extends | EdgeKind::Implements | EdgeKind::TypeOf | EdgeKind::Returns) => self.resolve_type_ref(wcx, r, name, Accept::Type),
             RefKind::Edge(EdgeKind::Instantiates) => {
                 let o = self.resolve_type_ref(wcx, r, name, Accept::Type);
                 if o.status == status::NO_CANDIDATE {

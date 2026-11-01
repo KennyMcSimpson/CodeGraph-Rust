@@ -152,12 +152,8 @@ impl Graph {
 }
 
 pub fn is_example_path(path: &str) -> bool {
-    path.split('/').any(|seg| {
-        matches!(
-            seg,
-            "example" | "examples" | "sample" | "samples" | "fixture" | "fixtures" | "benchmark" | "benchmarks" | "demo" | "demos"
-        )
-    })
+    path.split('/')
+        .any(|seg| matches!(seg, "example" | "examples" | "sample" | "samples" | "fixture" | "fixtures" | "benchmark" | "benchmarks" | "demo" | "demos"))
 }
 
 /// `root/rel` if it does not escape `root` (no `..` components, no absolute `rel`).

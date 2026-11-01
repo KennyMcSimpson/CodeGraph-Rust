@@ -94,11 +94,8 @@ pub fn build_seg(root: &Path, opts: &IndexOptions) -> Result<Built> {
     if let Some(t) = opts.threads {
         budget.threads = t.max(1);
     }
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(budget.threads)
-        .stack_size(16 << 20)
-        .build()
-        .map_err(|e| CgError::other(format!("thread pool: {e}")))?;
+    let pool =
+        rayon::ThreadPoolBuilder::new().num_threads(budget.threads).stack_size(16 << 20).build().map_err(|e| CgError::other(format!("thread pool: {e}")))?;
     let mut report = IndexReport { threads: budget.threads, budget_mb: budget.total >> 20, ..Default::default() };
 
     let config = ProjectConfig::load(root);

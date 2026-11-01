@@ -53,7 +53,8 @@ mod tests {
 
     #[test]
     fn indented_headers_and_comments_are_respected() {
-        let text = "# my codex config\nmodel = \"x\"\n\n  [mcp_servers.other]\n  command = \"o\"\n\n  [mcp_servers.cgr]\n  # pinned\n  command = \"/mine/cgr\"\n";
+        let text =
+            "# my codex config\nmodel = \"x\"\n\n  [mcp_servers.other]\n  command = \"o\"\n\n  [mcp_servers.cgr]\n  # pinned\n  command = \"/mine/cgr\"\n";
         let mut doc = parse(Path::new("c.toml"), Some(text)).unwrap();
         assert!(ensure_mcp_server(&mut doc, "cgr", "/bin/cgr", &["serve", "--mcp"]));
         let out = doc.to_string();

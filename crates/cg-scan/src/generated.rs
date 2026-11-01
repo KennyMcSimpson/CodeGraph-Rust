@@ -68,14 +68,10 @@ fn content_patterns() -> &'static Vec<Regex> {
 
 fn comment_leader() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r#"(?i)^\s*(?://|/\*+|\*+/?|#+|--+|<!--|%+|;+|'|!|\(\*|\{-|"""|'''|=begin|<#|@rem\b|rem\b)"#)
-            .expect("comment leader")
-    })
+    RE.get_or_init(|| Regex::new(r#"(?i)^\s*(?://|/\*+|\*+/?|#+|--+|<!--|%+|;+|'|!|\(\*|\{-|"""|'''|=begin|<#|@rem\b|rem\b)"#).expect("comment leader"))
 }
 
-const BLOCK_DELIMS: [(&str, &str); 6] =
-    [("/*", "*/"), ("<!--", "-->"), ("\"\"\"", "\"\"\""), ("'''", "'''"), ("=begin", "=end"), ("<#", "#>")];
+const BLOCK_DELIMS: [(&str, &str); 6] = [("/*", "*/"), ("<!--", "-->"), ("\"\"\"", "\"\"\""), ("'''", "'''"), ("=begin", "=end"), ("<#", "#>")];
 
 /// Banner in the head of the file ("Code generated ... DO NOT EDIT.", `@generated`, ...).
 pub fn has_generated_header(content: &str) -> bool {
