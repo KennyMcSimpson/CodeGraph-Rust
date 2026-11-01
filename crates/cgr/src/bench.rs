@@ -513,7 +513,7 @@ pub fn sync(path: Option<PathBuf>, edits: usize, seed: u64, in_place: bool, veri
     slow.truncate(5);
     let mut verdict: Option<bool> = None;
     if verify {
-        verdict = Some(crate::cmds::debug_diff_inner(&root, 10)?);
+        verdict = Some(crate::cmds::debug_diff_inner(&root, 10, json_out)?);
     }
     let delta_syncs = edits - rebuilds.len();
     if json_out {

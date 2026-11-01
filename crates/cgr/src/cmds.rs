@@ -367,34 +367,42 @@ pub fn debug_unresolved(base: Option<PathBuf>) -> Result<i32> {
 }
 
 /// Compare the stored index of the project at `root` with a fresh full rebuild of the same
-/// tree. Returns true when they are identical.
-pub fn debug_diff_inner(root: &Path, limit: usize) -> Result<bool> {
+/// tree. Returns true when they are identical. The report goes to stderr when `to_stderr`
+/// (callers whose stdout is machine-readable), else to stdout.
+pub fn debug_diff_inner(root: &Path, limit: usize, to_stderr: bool) -> Result<bool> {
     use std::collections::BTreeSet;
+    let say = |line: String| {
+        if to_stderr {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
+        }
+    };
     let proj = Project::locate(root).map_err(|e| anyhow!("{e}"))?;
     let stored: Vec<String> = dump::canonical(&proj.snap.view);
     let built = cg_resolve::index::build_seg(proj.root(), &Default::default())?;
     let fresh_view = cg_store::View::new(std::sync::Arc::new(built.seg)).with_root(proj.root().to_path_buf());
     let fresh: Vec<String> = dump::canonical(&fresh_view);
     if stored == fresh {
-        println!("identical: {} canonical lines", stored.len());
+        say(format!("identical: {} canonical lines", stored.len()));
         return Ok(true);
     }
     let (a, b): (BTreeSet<&String>, BTreeSet<&String>) = (stored.iter().collect(), fresh.iter().collect());
-    println!("DIFFERENT: {} stored lines vs {} rebuilt lines", stored.len(), fresh.len());
-    println!("-- only in the stored index:");
+    say(format!("DIFFERENT: {} stored lines vs {} rebuilt lines", stored.len(), fresh.len()));
+    say("-- only in the stored index:".to_owned());
     for l in a.difference(&b).take(limit) {
-        println!("  {l}");
+        say(format!("  {l}"));
     }
-    println!("-- only in the rebuild:");
+    say("-- only in the rebuild:".to_owned());
     for l in b.difference(&a).take(limit) {
-        println!("  {l}");
+        say(format!("  {l}"));
     }
     Ok(false)
 }
 
 pub fn debug_diff(path: Option<PathBuf>, limit: usize) -> Result<i32> {
     let start = start_dir(path)?;
-    Ok(if debug_diff_inner(&start, limit)? { 0 } else { 1 })
+    Ok(if debug_diff_inner(&start, limit, false)? { 0 } else { 1 })
 }
 
 #[allow(dead_code)]
