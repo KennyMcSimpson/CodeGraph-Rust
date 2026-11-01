@@ -93,7 +93,13 @@ impl<'a> Cx<'a> {
     pub fn lookup_binding(&self, mut scope: u32, name: &str) -> Option<(String, String)> {
         loop {
             if self.facts.scopes[scope as usize].kind != ScopeKind::Class {
-                if let Some(b) = self.facts.bindings.iter().rev().find(|b| b.scope == scope && b.name == name) {
+                if let Some(b) = self
+                    .facts
+                    .bindings
+                    .iter()
+                    .rev()
+                    .find(|b| b.scope == scope && b.name == name && !matches!(b.kind, BindKind::MemberFn | BindKind::ReturnType))
+                {
                     return Some((b.decl_type.clone(), b.init_ctor.clone()));
                 }
             }

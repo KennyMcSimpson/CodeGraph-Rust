@@ -189,18 +189,38 @@ impl<'v> Modules<'v> {
     }
 
     fn index_rust(&mut self, f: FileId, path: &str) {
-        let (crate_idx, src_dir): (u32, String) = match self.project.crates.iter().position(|c| path.starts_with(&format!("{}/", c.dir)) || c.dir.is_empty()) {
-            Some(i) => {
-                let c = &self.project.crates[i];
-                (i as u32, if c.dir.is_empty() { "src".to_owned() } else { format!("{}/src", c.dir) })
-            }
-            None => match path.rfind("/src/") {
-                Some(i) => (NONE, path[..i + 4].to_owned()),
-                None if path.starts_with("src/") => (NONE, "src".to_owned()),
-                None => (NONE, dir_of(path).to_owned()),
-            },
-        };
-        let modpath = match path.strip_prefix(&format!("{src_dir}/")) {
+        // Auxiliary Cargo targets are independent crates. In particular, a bench
+        // sorted before src/lib.rs must never become the library's root module.
+        let separate = self.project.crates.len() as u32 + f.0;
+        let (crate_idx, src_dir, root): (u32, String, Option<&str>) =
+            match self.project.crates.iter().position(|c| path.starts_with(&format!("{}/", c.dir)) || c.dir.is_empty()) {
+                Some(i) => {
+                    let c = &self.project.crates[i];
+                    let root = c.roots.iter().find(|r| self.path_to_file.contains_key(r.as_str())).map(String::as_str);
+                    let src_dir =
+                        root.map(dir_of).map(str::to_owned).unwrap_or_else(|| if c.dir.is_empty() { "src".to_owned() } else { format!("{}/src", c.dir) });
+                    let rel = path.strip_prefix(&format!("{}/", c.dir)).unwrap_or(path);
+                    let auxiliary = rel.starts_with("tests/")
+                        || rel.starts_with("examples/")
+                        || rel.starts_with("benches/")
+                        || rel.starts_with("src/bin/")
+                        || rel == "build.rs";
+                    let in_source = src_dir.is_empty() || path.starts_with(&format!("{src_dir}/"));
+                    if !in_source || auxiliary || (c.roots.iter().any(|r| r == path) && root != Some(path)) {
+                        (separate, dir_of(path).to_owned(), Some(path))
+                    } else {
+                        (i as u32, src_dir, root)
+                    }
+                }
+                None => match path.rfind("/src/") {
+                    Some(i) => (NONE, path[..i + 4].to_owned(), None),
+                    None if path.starts_with("src/") => (NONE, "src".to_owned(), None),
+                    None => (separate, dir_of(path).to_owned(), Some(path)),
+                },
+            };
+        let rel = if src_dir.is_empty() { Some(path) } else { path.strip_prefix(&format!("{src_dir}/")) };
+        let modpath = match rel {
+            _ if root == Some(path) => String::new(),
             Some(rel) => {
                 let stem = rel.strip_suffix(".rs").unwrap_or(rel);
                 let mut segs: Vec<&str> = stem.split('/').collect();
@@ -222,7 +242,11 @@ impl<'v> Modules<'v> {
             }
             None => String::new(), // tests/, examples/, benches/, build.rs: separate roots
         };
-        self.rs_mod_to_file.entry((crate_idx, modpath.clone())).or_insert(f);
+        if root == Some(path) {
+            self.rs_mod_to_file.insert((crate_idx, modpath.clone()), f);
+        } else {
+            self.rs_mod_to_file.entry((crate_idx, modpath.clone())).or_insert(f);
+        }
         self.rs_file_mod.insert(f, (crate_idx, modpath));
     }
 
@@ -463,9 +487,16 @@ impl<'v> Modules<'v> {
 
     // ---- Rust
     fn resolve_rust(&self, spec: &str, from: FileId) -> ImportTarget {
-        let Some((crate_idx, modpath)) = self.rs_file_mod.get(&from) else { return ImportTarget::External };
+        self.resolve_rust_path(spec, from).0
+    }
+
+    /// The longest module prefix and the number of trailing declaration/member
+    /// segments. Returning the tail prevents `crate::api::Type` being mistaken
+    /// for the module itself when resolving a qualified type or return value.
+    pub fn resolve_rust_path(&self, spec: &str, from: FileId) -> (ImportTarget, usize) {
+        let Some((crate_idx, modpath)) = self.rs_file_mod.get(&from) else { return (ImportTarget::External, 0) };
         let segs: Vec<&str> = spec.split("::").filter(|s| !s.is_empty()).collect();
-        let Some(first) = segs.first().copied() else { return ImportTarget::External };
+        let Some(first) = segs.first().copied() else { return (ImportTarget::External, 0) };
         let (target_crate, mut path): (u32, Vec<String>) = match first {
             "crate" => (*crate_idx, segs[1..].iter().map(|s| s.to_string()).collect()),
             "self" => (*crate_idx, modpath.split("::").filter(|s| !s.is_empty()).map(str::to_owned).chain(segs[1..].iter().map(|s| s.to_string())).collect()),
@@ -492,20 +523,21 @@ impl<'v> Modules<'v> {
                         full.extend(segs.iter().map(|s| s.to_string()));
                         (*crate_idx, full)
                     } else {
-                        return ImportTarget::External;
+                        return (ImportTarget::External, 0);
                     }
                 }
             }
         };
+        let full_len = path.len();
         // longest module prefix that exists
         while !path.is_empty() || self.rs_mod_to_file.contains_key(&(target_crate, String::new())) {
             if let Some(f) = self.rs_mod_to_file.get(&(target_crate, path.join("::"))) {
-                return ImportTarget::File(*f);
+                return (ImportTarget::File(*f), full_len - path.len());
             }
             if path.pop().is_none() {
                 break;
             }
         }
-        ImportTarget::NotFound
+        (ImportTarget::NotFound, 0)
     }
 }

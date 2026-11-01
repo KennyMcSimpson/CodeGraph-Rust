@@ -5,6 +5,7 @@
 use crate::modules::{ImportTarget, Modules, PkgId};
 use crate::project::ProjectInfo;
 use cg_core::{EdgeKind, FileId, Lang, LangFamily, NodeIdx, NodeKind, StrId, NONE};
+use cg_extract::facts::COMMONJS_MODULE;
 use cg_extract::{BindKind, ImportKind};
 use cg_store::{outkind, status, View};
 use rayon::prelude::*;
@@ -43,6 +44,10 @@ pub struct Engine<'v> {
     pub pkg_defs: Vec<FxHashMap<&'v str, SmallVec<[NodeIdx; 2]>>>,
     /// Direct supertypes (`extends` / `implements` resolved in round 1).
     pub supers: FxHashMap<NodeIdx, SmallVec<[NodeIdx; 3]>>,
+    /// JavaScript functions with syntax evidence that they implement an object member.
+    pub member_functions: FxHashMap<&'v str, SmallVec<[NodeIdx; 2]>>,
+    pub return_types: FxHashMap<NodeIdx, &'v str>,
+    pub django_model: Option<NodeIdx>,
     pub n_files: usize,
 }
 
@@ -85,6 +90,12 @@ impl<'v> Engine<'v> {
         for (i, t) in computed {
             imp_targets[i] = t;
         }
+        let mut member_functions: FxHashMap<&'v str, SmallVec<[NodeIdx; 2]>> = FxHashMap::default();
+        for &f in &files {
+            for b in view.bindings_of(f).iter().filter(|b| b.kind == BindKind::MemberFn as u8 && b.node.is_some()) {
+                member_functions.entry(view.text_str(b.name)).or_default().push(b.node);
+            }
+        }
 
         let mut e = Engine {
             budget,
@@ -96,9 +107,26 @@ impl<'v> Engine<'v> {
             stars: vec![Vec::new(); n_files],
             pkg_defs: Vec::new(),
             supers: FxHashMap::default(),
+            member_functions,
+            return_types: files
+                .iter()
+                .flat_map(|&f| view.bindings_of(f))
+                .filter(|b| b.kind == BindKind::ReturnType as u8 && b.node.is_some())
+                .map(|b| (b.node, view.text_str(b.decl_type)))
+                .collect(),
+            django_model: None,
             n_files,
         };
         e.build_exports(&files);
+        if project.py_deps.contains("django") {
+            if let Some(f) = files.iter().copied().find(|f| view.file(*f).lang() == Lang::Python) {
+                if let ImportTarget::File(base) = e.modules.resolve_import(Lang::Python, "django.db.models.base", f) {
+                    if let Some(Bound::Node(n)) = e.lookup_export(base, "Model", 0) {
+                        e.django_model = Some(n);
+                    }
+                }
+            }
+        }
         e.build_pkg_defs(&files);
         e
     }
@@ -144,6 +172,10 @@ impl<'v> Engine<'v> {
                 for ex in view.exports_of(f) {
                     let name = view.text_str(ex.name);
                     let spec = view.text_str(ex.from_spec);
+                    if name == COMMONJS_MODULE && spec.is_empty() && view.text_str(ex.from_name) == "*" {
+                        map.insert(name, ExportEntry::Module(f));
+                        continue;
+                    }
                     if ex.star != 0 {
                         if let Some(ImportTarget::File(tf)) = Some(self.modules.resolve_import(lang, spec, f)) {
                             stars.push(tf);
@@ -332,18 +364,19 @@ impl<'v> Engine<'v> {
             ImportTarget::Node(n) => Bound::Node(n),
             ImportTarget::Pkg(p) => Bound::Pkg(p),
             ImportTarget::File(tf) => {
+                if imp.kind == ImportKind::Default as u8 && imported == "default" {
+                    if let Some(value) = self.lookup_export(tf, COMMONJS_MODULE, 0) {
+                        return value;
+                    }
+                }
                 if imp.kind == ImportKind::Namespace as u8 || imported == "*" {
                     return Bound::Module(tf);
                 }
                 if imp.kind == ImportKind::Require as u8 {
-                    // CommonJS: any top-level definition counts
                     if let Some(b) = self.lookup_export(tf, imported, 0) {
                         return b;
                     }
-                    return match self.lookup_top_level(tf, imported) {
-                        Some(n) => Bound::Node(n),
-                        None => Bound::Module(tf),
-                    };
+                    return Bound::Unknown;
                 }
                 if let Some(b) = self.lookup_export(tf, imported, 0) {
                     return b;

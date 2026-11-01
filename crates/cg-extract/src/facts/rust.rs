@@ -5,7 +5,80 @@ use super::util::*;
 use super::*;
 
 pub fn extract(cx: &mut Cx, root: Node) {
-    walk(cx, root, 0);
+    // Conditional item wrappers such as Tokio's cfg_rt! hide `pub use` from
+    // tree-sitter. Reparse a position-preserving view with just those wrappers
+    // blanked out. Never expand arbitrary macros or change the kernel's nodes.
+    if let Some(tree) = conditional_items(cx.src, root) {
+        walk(cx, tree.root_node(), 0);
+    } else {
+        walk(cx, root, 0);
+    }
+}
+
+fn conditional_items(src: &str, root: Node) -> Option<Tree> {
+    use std::time::{Duration, Instant};
+    use tree_sitter::{ParseOptions, Parser};
+
+    if src.len() > 1024 * 1024 || !src.contains("cfg_") {
+        return None;
+    }
+    fn wrapper(name: &str) -> bool {
+        name.starts_with("cfg_") && name != "cfg_if" && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+    }
+    fn blank(bytes: &mut [u8]) {
+        for b in bytes {
+            if *b != b'\n' && *b != b'\r' {
+                *b = b' ';
+            }
+        }
+    }
+    fn collect(n: Node, src: &str, ranges: &mut Vec<(usize, usize)>, depth: usize) {
+        if depth > 128 || n.kind() == "macro_definition" {
+            return;
+        }
+        if matches!(n.kind(), "macro_invocation" | "token_tree") {
+            let mut c = n.walk();
+            let children: Vec<_> = n.children(&mut c).collect();
+            let mut i = 0;
+            while i < children.len() {
+                if i + 2 < children.len() && children[i + 1].kind() == "!" && children[i + 2].kind() == "token_tree" {
+                    let name = &src[children[i].byte_range()];
+                    let body = children[i + 2];
+                    if wrapper(name) && src.as_bytes().get(body.start_byte()) == Some(&b'{') {
+                        ranges.push((children[i].start_byte(), body.start_byte() + 1));
+                        ranges.push((body.end_byte() - 1, body.end_byte()));
+                        collect(body, src, ranges, depth + 1);
+                    }
+                    // An unknown macro's tokens are not ordinary Rust items.
+                    i += 3;
+                } else {
+                    collect(children[i], src, ranges, depth + 1);
+                    i += 1;
+                }
+            }
+        } else {
+            for ch in kids(n) {
+                collect(ch, src, ranges, depth + 1);
+            }
+        }
+    }
+    let mut ranges = Vec::new();
+    collect(root, src, &mut ranges, 0);
+    if ranges.is_empty() {
+        return None;
+    }
+    let mut masked = src.as_bytes().to_vec();
+    for (start, end) in ranges {
+        blank(&mut masked[start..end]);
+    }
+    let mut parser = Parser::new();
+    parser.set_language(&cg_kernel::hooks::language("rust")?).ok()?;
+    let deadline = Instant::now() + Duration::from_millis(100);
+    let mut cancel = |_: &tree_sitter::ParseState| Instant::now() >= deadline;
+    let tree =
+        parser.parse_with_options(&mut |offset, _| masked.get(offset..).unwrap_or_default(), None, Some(ParseOptions::new().progress_callback(&mut cancel)))?;
+    // Non-item wrappers (cfg_if!, DSLs, malformed syntax) are left opaque.
+    (!tree.root_node().has_error()).then_some(tree)
 }
 
 fn walk_children(cx: &mut Cx, n: Node, scope: u32) {
@@ -47,7 +120,14 @@ fn walk(cx: &mut Cx, n: Node, scope: u32) {
 fn rust_type_name(cx: &Cx, n: Node) -> String {
     match n.kind() {
         "type_identifier" | "scoped_type_identifier" => cx.text(n).to_owned(),
-        "generic_type" => n.child_by_field_name("type").map(|c| rust_type_name(cx, c)).unwrap_or_default(),
+        "generic_type" => {
+            let base = n.child_by_field_name("type").map(|c| rust_type_name(cx, c)).unwrap_or_default();
+            if matches!(base.rsplit("::").next(), Some("Result" | "Option")) {
+                cx.text(n).to_owned()
+            } else {
+                base
+            }
+        }
         "reference_type" | "pointer_type" => n.child_by_field_name("type").map(|c| rust_type_name(cx, c)).unwrap_or_default(),
         "abstract_type" | "dynamic_type" | "bounded_type" => {
             n.child_by_field_name("trait").or_else(|| n.named_child(0)).map(|c| rust_type_name(cx, c)).unwrap_or_default()
@@ -78,15 +158,29 @@ fn bind_pattern(cx: &mut Cx, p: Node, scope: u32, kind: BindKind) {
 }
 
 fn value_info(cx: &Cx, v: Node) -> String {
+    value_path(cx, v, 0)
+}
+
+fn value_path(cx: &Cx, v: Node, depth: u8) -> String {
+    if depth >= 16 || v.end_byte() - v.start_byte() > 4096 {
+        return String::new();
+    }
     match v.kind() {
+        "identifier" | "scoped_identifier" => cx.text(v).to_owned(),
+        "generic_function" => v.child_by_field_name("function").map(|f| value_path(cx, f, depth + 1)).unwrap_or_default(),
         "struct_expression" => v.child_by_field_name("name").map(|n| cx.text(n).to_owned()).unwrap_or_default(),
-        "call_expression" => match v.child_by_field_name("function") {
-            Some(f) if matches!(f.kind(), "identifier" | "scoped_identifier") => format!("{}()", cx.text(f)),
-            _ => String::new(),
-        },
-        "try_expression" | "await_expression" | "reference_expression" | "parenthesized_expression" => {
-            v.named_child(0).map(|c| value_info(cx, c)).unwrap_or_default()
+        "call_expression" => {
+            v.child_by_field_name("function").map(|f| value_path(cx, f, depth + 1)).filter(|p| !p.is_empty()).map(|p| format!("{p}()")).unwrap_or_default()
         }
+        "field_expression" => {
+            let base = v.child_by_field_name("value").map(|v| value_path(cx, v, depth + 1)).unwrap_or_default();
+            match v.child_by_field_name("field") {
+                Some(field) if !base.is_empty() => format!("{base}.{}", cx.text(field)),
+                _ => String::new(),
+            }
+        }
+        "try_expression" => v.named_child(0).map(|c| value_path(cx, c, depth + 1)).filter(|p| !p.is_empty()).map(|p| format!("{p}?")).unwrap_or_default(),
+        "await_expression" | "reference_expression" | "parenthesized_expression" => v.named_child(0).map(|c| value_path(cx, c, depth + 1)).unwrap_or_default(),
         _ => String::new(),
     }
 }
@@ -136,6 +230,19 @@ fn params(cx: &mut Cx, list: Node, sc: u32) {
 }
 
 fn function(cx: &mut Cx, n: Node, scope: u32) {
+    if let (Some(name), Some(ret)) = (n.child_by_field_name("name"), n.child_by_field_name("return_type")) {
+        if let Some(row) = cx.row_at(cx.start(n)) {
+            cx.facts.bindings.push(BindingFact {
+                scope,
+                name: cx.text(name).to_owned(),
+                kind: BindKind::ReturnType,
+                decl_type: cx.text(ret).to_owned(),
+                init_ctor: String::new(),
+                line: cx.line(n),
+                node_row: row,
+            });
+        }
+    }
     if cx.facts.scopes[scope as usize].kind == ScopeKind::Function {
         if let Some(name) = n.child_by_field_name("name") {
             let nm = cx.text(name).to_owned();
