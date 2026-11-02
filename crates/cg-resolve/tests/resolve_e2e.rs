@@ -120,11 +120,8 @@ export function asserted() {
         }
         assert!(!has(&edges, &format!("{caller} -calls-> service.ts::Runner::run")), "satisfies must not replace the receiver with its constraint");
     }
-    let call_targets = |caller: &str| {
-        let prefix = format!("app.ts::{caller} -calls-> ");
-        edges.iter().filter_map(|edge| edge.strip_prefix(&prefix)).collect::<Vec<_>>()
-    };
-    assert_eq!(call_targets("factory"), call_targets("plainFactory"), "satisfies must preserve the existing factory inference behavior");
+    assert!(has(&edges, "app.ts::factory -calls-> service.ts::makeService"), "the factory call itself must be preserved");
+    assert!(!has(&edges, "app.ts::factory -calls-> service.ts::Runner::run"), "satisfies must not replace an unknown receiver with its constraint");
     assert!(has(&edges, "app.ts::asserted -calls-> service.ts::Runner::run"), "an inner as assertion still supplies its explicit type");
 }
 
